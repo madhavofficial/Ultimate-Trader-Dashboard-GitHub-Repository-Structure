@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  database:
+    image: postgres:15
+    container_name: utd-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: utd
+    ports:
+      - "5433:5432"
+    volumes:
+      - utd_pgdata:/var/lib/postgresql/data
+
+volumes:
+  utd_pgdata:

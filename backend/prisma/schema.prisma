@@ -17,6 +17,7 @@ model User {
   alerts        Alert[]
   holdings      Holding[]
   auditLogs     AuditLog[]
+  watchlist     WatchlistItem[]
 }
 
 model RefreshToken {
@@ -56,6 +57,8 @@ model Holding {
   avg       Float
   user      User     @relation(fields: [userId], references: [id])
   userId    String
+
+  @@unique([userId, symbol])
 }
 
 model AuditLog {
@@ -98,10 +101,22 @@ model Job {
   attempts    Int       @default(0)
   runAt       DateTime  @default(now())
   lockedAt    DateTime?
+  lockedBy    String?
   completedAt DateTime?
   lastError   String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@index([status, runAt])
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  symbol    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+
+  @@unique([userId, symbol])
+  @@index([userId, createdAt])
 }

@@ -1,0 +1,46 @@
+import bcrypt from "bcrypt";
+import { prisma } from "./client";
+
+const seedEmail = process.env.SEED_EMAIL;
+const seedPassword = process.env.SEED_PASSWORD;
+
+if (!seedEmail || !seedPassword) {
+  throw new Error("SEED_EMAIL and SEED_PASSWORD must be set before running the seed");
+}
+
+async function main() {
+  const user = await prisma.user.upsert({
+    where: { email: seedEmail.toLowerCase() },
+    update: {},
+    create: { email: seedEmail.toLowerCase(), passwordHash: await bcrypt.hash(seedPassword, 12) },
+  });
+
+  const holdings = [
+    { symbol: "INFY", qty: 10, avg: 1500 },
+    { symbol: "RELIANCE", qty: 5, avg: 2400 },
+    { symbol: "TCS", qty: 2, avg: 3800 },
+  ];
+  const watchlist = ["INFY", "RELIANCE", "TCS"];
+
+  await prisma.$transaction([
+    ...holdings.map((holding) => prisma.holding.upsert({
+      where: { userId_symbol: { userId: user.id, symbol: holding.symbol } },
+      update: holding,
+      create: { ...holding, userId: user.id },
+    })),
+    ...watchlist.map((symbol) => prisma.watchlistItem.upsert({
+      where: { userId_symbol: { userId: user.id, symbol } },
+      update: {},
+      create: { userId: user.id, symbol },
+    })),
+  ]);
+
+  console.log(`Seeded demo data for ${user.email}`);
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

@@ -9,7 +9,8 @@ cd backend
 cp .env.example .env
 npm install
 docker compose -f ../docker-compose.yml up -d database
-npx prisma migrate deploy
+npm run prisma:migrate
+npm run prisma:seed
 npm run dev
 ```
 
@@ -20,6 +21,7 @@ Useful checks:
 ```bash
 npm run build
 npm test
+RUN_INTEGRATION_TESTS=1 npm run test:integration
 curl http://localhost:8000/
 curl http://localhost:8000/health
 ```

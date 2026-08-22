@@ -94,10 +94,26 @@ router.post("/refresh", async (req, res, next) => {
     if (!rawToken) throw new AppError(401, "No refresh token");
 
     const record = await prisma.refreshToken.findFirst({
-      where: { tokenHash: hashToken(rawToken), revokedAt: null, expiresAt: { gt: new Date() } },
+      where: { tokenHash: hashToken(rawToken) },
       include: { user: { select: { id: true, email: true } } },
     });
     if (!record) throw new AppError(401, "Invalid refresh token");
+
+    if (record.revokedAt) {
+      await prisma.refreshToken.updateMany({
+        where: { userId: record.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await writeAuditLog({
+        userId: record.userId,
+        action: "REFRESH_TOKEN_REUSE_DETECTED",
+        entityType: "RefreshToken",
+        entityId: record.id,
+        request: req,
+      });
+      throw new AppError(401, "Refresh token reuse detected");
+    }
+    if (record.expiresAt <= new Date()) throw new AppError(401, "Invalid refresh token");
 
     const payload = jwt.verify(rawToken, env.JWT_REFRESH_SECRET) as jwt.JwtPayload;
     if (payload.sub !== record.userId) throw new AppError(401, "Invalid refresh token");

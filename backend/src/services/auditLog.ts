@@ -7,17 +7,23 @@ export async function writeAuditLog(input: {
   entityType: string;
   entityId?: string;
   metadata?: Prisma.InputJsonValue;
-  request?: { ip?: string; headers: Record<string, string | string[] | undefined> };
+  request?: { ip?: string; socket?: { remoteAddress?: string }; headers: Record<string, string | string[] | undefined> };
 }) {
-  await prisma.auditLog.create({
-    data: {
-      userId: input.userId,
-      action: input.action,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      metadata: input.metadata,
-      ipAddress: input.request?.ip,
-      userAgent: input.request?.headers["user-agent"]?.toString(),
-    },
-  });
+  try {
+    const forwardedFor = input.request?.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim();
+    const ipAddress = forwardedFor || input.request?.socket?.remoteAddress || input.request?.ip;
+    await prisma.auditLog.create({
+      data: {
+        userId: input.userId,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        metadata: input.metadata,
+        ipAddress,
+        userAgent: input.request?.headers["user-agent"]?.toString(),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to write audit log", error);
+  }
 }

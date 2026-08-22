@@ -10,8 +10,11 @@ import authRoutes from "./routes/auth";
 import portfolioRoutes from "./routes/portfolio";
 import tradeRoutes from "./routes/trades";
 import alertRoutes from "./routes/alerts";
+import kiteRoutes from "./routes/kite";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { prisma } from "./db/client";
+import jwt from "jsonwebtoken";
+import { userRoom } from "./services/streamHandler";
 
 export const app = express();
 app.disable("x-powered-by");
@@ -37,14 +40,32 @@ app.use("/auth", authRoutes);
 app.use("/portfolio", portfolioRoutes);
 app.use("/trades", tradeRoutes);
 app.use("/alerts", alertRoutes);
+app.use("/broker/kite", kiteRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 export function createHttpServer() {
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: env.CORS_ORIGIN, credentials: true } });
+  app.set("io", io);
+
+  if (env.MARKET_DATA_MODE === "kite") {
+    io.use((socket, next) => {
+      try {
+        const token = socket.handshake.auth?.token;
+        if (!token) return next(new Error("Socket authentication required"));
+        const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as jwt.JwtPayload;
+        if (!payload.sub) return next(new Error("Invalid socket token"));
+        socket.data.userId = payload.sub;
+        return next();
+      } catch {
+        return next(new Error("Invalid socket token"));
+      }
+    });
+  }
 
   io.on("connection", (socket) => {
+    if (socket.data.userId) socket.join(userRoom(socket.data.userId));
     socket.on("ping", (payload) => socket.emit("pong", { msg: "pong", received: payload }));
   });
 

@@ -18,6 +18,7 @@ model User {
   holdings      Holding[]
   auditLogs     AuditLog[]
   watchlist     WatchlistItem[]
+  brokerSessions BrokerSession[]
 }
 
 model RefreshToken {
@@ -119,4 +120,19 @@ model WatchlistItem {
 
   @@unique([userId, symbol])
   @@index([userId, createdAt])
+}
+
+model BrokerSession {
+  id                   String   @id @default(uuid())
+  provider             String   @default("ZERODHA")
+  brokerUserId         String?
+  accessTokenEncrypted String
+  expiresAt            DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId               String
+
+  @@unique([userId, provider])
+  @@index([provider, expiresAt])
 }

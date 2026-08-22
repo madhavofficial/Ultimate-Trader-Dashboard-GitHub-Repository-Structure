@@ -11,10 +11,12 @@ import portfolioRoutes from "./routes/portfolio";
 import tradeRoutes from "./routes/trades";
 import alertRoutes from "./routes/alerts";
 import kiteRoutes from "./routes/kite";
+import marketRoutes from "./routes/market";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { prisma } from "./db/client";
 import jwt from "jsonwebtoken";
-import { userRoom } from "./services/streamHandler";
+import { userRoom } from "./services/socketRooms";
+import { startInstrumentSyncScheduler } from "./services/instrumentService";
 
 export const app = express();
 app.disable("x-powered-by");
@@ -41,6 +43,7 @@ app.use("/portfolio", portfolioRoutes);
 app.use("/trades", tradeRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/broker/kite", kiteRoutes);
+app.use("/market", marketRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
@@ -65,6 +68,14 @@ export function createHttpServer() {
   }
 
   io.on("connection", (socket) => {
+    if (!socket.data.userId && socket.handshake.auth?.token) {
+      try {
+        const payload = jwt.verify(socket.handshake.auth.token, env.JWT_ACCESS_SECRET) as jwt.JwtPayload;
+        if (payload.sub) socket.data.userId = payload.sub;
+      } catch {
+        // Mock mode keeps public tick streaming, but invalid optional auth gets no private room.
+      }
+    }
     if (socket.data.userId) socket.join(userRoom(socket.data.userId));
     socket.on("ping", (payload) => socket.emit("pong", { msg: "pong", received: payload }));
   });
@@ -76,8 +87,12 @@ export function createHttpServer() {
 export async function startServer() {
   const server = createHttpServer();
   server.listen(env.PORT, () => console.log(`Backend listening on http://localhost:${env.PORT}`));
+  const stopInstrumentScheduler = env.MARKET_DATA_MODE === "kite" && env.KITE_SYNC_USER_ID
+    ? startInstrumentSyncScheduler(env.KITE_SYNC_USER_ID)
+    : undefined;
 
   const shutdown = async () => {
+    stopInstrumentScheduler?.();
     server.close();
     await prisma.$disconnect();
   };

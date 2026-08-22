@@ -38,3 +38,14 @@ Set `MARKET_DATA_MODE=kite` and configure the Kite values in `backend/.env`. The
 - `POST /broker/kite/stream/start` and `/stop` — controls backend-owned KiteTicker streaming
 
 Provide `KITE_TOKEN_ENCRYPTION_KEY` as 64 hexadecimal characters. Order placement is not exposed in this phase.
+
+## Paper dashboard
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+The dashboard provides login, live/mock watchlist prices, paper buy/sell orders, holdings, and unrealized P&amp;L. Instrument search and synchronization are available through the backend market routes.

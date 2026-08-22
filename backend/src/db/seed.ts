@@ -14,6 +14,7 @@ async function main() {
     update: {},
     create: { email: seedEmail.toLowerCase(), passwordHash: await bcrypt.hash(seedPassword, 12) },
   });
+  await prisma.portfolioAccount.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id } });
 
   const holdings = [
     { symbol: "INFY", qty: 10, avg: 1500 },

@@ -1,6 +1,8 @@
 import { Server } from "socket.io";
 import { KiteTicker, Tick, Ticker } from "kiteconnect";
 import { getKiteTickerCredentials } from "./kiteService";
+import { updateLtpAndBroadcast } from "./portfolioService";
+import { userRoom } from "./socketRooms";
 
 const activeTickers = new Map<string, Ticker>();
 
@@ -13,7 +15,10 @@ export async function startKiteTicker(io: Server, userId: string, tokens: number
     ticker.subscribe(tokens);
     ticker.setMode(ticker.modeQuote, tokens);
   });
-  ticker.on("ticks", (ticks: Tick[]) => io.to(userRoom(userId)).emit("kite:tick", ticks));
+  ticker.on("ticks", (ticks: Tick[]) => {
+    io.to(userRoom(userId)).emit("kite:tick", ticks);
+    void updateLtpAndBroadcast(io, ticks, userId);
+  });
   ticker.on("error", (error) => console.error("KiteTicker error", error));
   ticker.on("disconnect", (error) => console.warn("KiteTicker disconnected", error?.message));
   ticker.on("noreconnect", () => console.error(`KiteTicker stopped reconnecting for user ${userId}`));
@@ -29,8 +34,4 @@ export function stopKiteTicker(userId: string) {
     ticker.disconnect();
     activeTickers.delete(userId);
   }
-}
-
-export function userRoom(userId: string) {
-  return `kite:user:${userId}`;
 }

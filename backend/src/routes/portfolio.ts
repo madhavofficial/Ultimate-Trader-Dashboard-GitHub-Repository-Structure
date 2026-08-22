@@ -1,14 +1,16 @@
 import { Router } from "express";
 import { prisma } from "../db/client";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
+import { ensurePortfolioAccount } from "../services/paperTradingService";
+import { getPortfolioSnapshot } from "../services/portfolioService";
 
 const router = Router();
 router.use(authMiddleware);
 
 router.get("/", async (req: AuthRequest, res, next) => {
   try {
-    const holdings = await prisma.holding.findMany({ where: { userId: req.user!.id }, orderBy: { symbol: "asc" } });
-    return res.json({ ok: true, user: req.user, holdings });
+    await ensurePortfolioAccount(req.user!.id);
+    return res.json({ ok: true, user: req.user, portfolio: await getPortfolioSnapshot(req.user!.id) });
   } catch (error) {
     return next(error);
   }

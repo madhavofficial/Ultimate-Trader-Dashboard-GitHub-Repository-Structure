@@ -19,6 +19,8 @@ model User {
   auditLogs     AuditLog[]
   watchlist     WatchlistItem[]
   brokerSessions BrokerSession[]
+  portfolioAccount PortfolioAccount?
+  ledgerEntries CashLedgerEntry[]
 }
 
 model RefreshToken {
@@ -34,7 +36,7 @@ model Trade {
   id        String   @id @default(uuid())
   symbol    String
   qty       Int
-  price     Float
+  price     Decimal  @db.Decimal(20, 8)
   side      String
   timestamp DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
@@ -55,7 +57,7 @@ model Holding {
   id        String   @id @default(uuid())
   symbol    String
   qty       Int
-  avg       Float
+  avg       Decimal  @db.Decimal(20, 8)
   user      User     @relation(fields: [userId], references: [id])
   userId    String
 
@@ -135,4 +137,50 @@ model BrokerSession {
 
   @@unique([userId, provider])
   @@index([provider, expiresAt])
+}
+
+model PortfolioAccount {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  cashBalance    Decimal  @default(1000000) @db.Decimal(20, 8)
+  reservedMargin Decimal  @default(0) @db.Decimal(20, 8)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CashLedgerEntry {
+  id           String   @id @default(uuid())
+  userId       String
+  amount       Decimal  @db.Decimal(20, 8)
+  balanceAfter Decimal  @db.Decimal(20, 8)
+  realizedPnl  Decimal? @db.Decimal(20, 8)
+  reason       String
+  tradeId      String?
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Instrument {
+  id             String   @id @default(uuid())
+  instrumentToken Int
+  exchangeToken  Int?
+  tradingsymbol  String
+  name           String?
+  lastPrice      Decimal? @db.Decimal(20, 8)
+  expiry         DateTime?
+  strike         Decimal? @db.Decimal(20, 8)
+  tickSize       Decimal  @db.Decimal(20, 8)
+  lotSize        Int
+  instrumentType String
+  segment        String
+  exchange       String
+  syncedAt       DateTime @default(now())
+
+  @@unique([exchange, tradingsymbol])
+  @@index([tradingsymbol])
+  @@index([name])
+  @@index([instrumentToken])
 }

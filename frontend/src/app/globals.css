@@ -1,0 +1,19 @@
+:root { color-scheme: dark; --bg: #0b1020; --panel: #121a2e; --muted: #8b98b5; --line: #26324d; --green: #35d07f; --red: #ff6b7a; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: #eef3ff; font-family: Arial, sans-serif; }
+button, input, select { font: inherit; } button { cursor: pointer; }
+.shell { min-height: 100vh; padding: 28px; max-width: 1440px; margin: 0 auto; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; } .header h1 { margin: 0; font-size: 24px; }
+.muted { color: var(--muted); } .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.wide { grid-column: span 8; } .side { grid-column: span 4; } .full { grid-column: 1 / -1; }
+.panel h2 { margin: 0 0 16px; font-size: 16px; } .metric { font-size: 27px; font-weight: 700; margin: 8px 0; }
+.positive { color: var(--green); } .negative { color: var(--red); } table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid var(--line); } th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.row { display: flex; gap: 8px; align-items: center; } .stack { display: grid; gap: 10px; }
+input, select { color: #eef3ff; background: #0d1426; border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 100%; }
+.primary { color: #06130c; background: var(--green); border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 700; }
+.secondary { color: #eef3ff; background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.ticker { display: flex; gap: 10px; overflow-x: auto; margin-bottom: 16px; } .ticker-card { min-width: 150px; }
+.chart { height: 180px; display: flex; align-items: end; gap: 5px; padding: 16px 0; } .bar { flex: 1; background: linear-gradient(#35d07f, #1b8050); min-height: 12px; border-radius: 4px 4px 0 0; }
+@media (max-width: 900px) { .wide, .side { grid-column: 1 / -1; } .shell { padding: 16px; } }

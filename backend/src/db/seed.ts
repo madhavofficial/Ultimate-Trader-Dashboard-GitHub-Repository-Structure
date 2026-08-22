@@ -1,7 +1,10 @@
+import dotenv from "dotenv";
+dotenv.config();
 import bcrypt from "bcrypt";
 import { prisma } from "./client";
 
 const seedEmail = process.env.SEED_EMAIL;
+
 const seedPassword = process.env.SEED_PASSWORD;
 
 if (!seedEmail || !seedPassword) {

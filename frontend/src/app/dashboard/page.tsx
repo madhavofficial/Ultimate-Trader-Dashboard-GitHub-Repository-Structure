@@ -20,25 +20,38 @@ export default function DashboardPage() {
     const socket: Socket = io(SOCKET_URL, { auth: { token }, withCredentials: true });
     const onTicks = (ticks: Tick[]) => setPrices((previous) => { const next = { ...previous }; ticks.forEach((tick) => { if (tick.symbol) next[tick.symbol] = tick.last_price; }); return next; });
     socket.on("tick", onTicks); socket.on("kite:tick", onTicks); socket.on("portfolio:update", setPortfolio);
-    return () => { socket.off("tick", onTicks); socket.off("kite:tick", onTicks); socket.disconnect(); };
+    socket.on("connect_error", () => setMessage("Live prices are unavailable; check that the backend is running."));
+    return () => { socket.off("tick", onTicks); socket.off("kite:tick", onTicks); socket.off("portfolio:update", setPortfolio); socket.disconnect(); };
   }, [token]);
   useEffect(() => { if (token) void loadPortfolio(token); }, [token]);
   const watchlist = useMemo(() => ["INFY", "RELIANCE", "TCS"], []);
 
   async function authenticate(path: "login" | "register") {
-    const response = await fetch(`${API_URL}/auth/${path}`, { method: "POST", headers: { "content-type": "application/json" }, credentials: "include", body: JSON.stringify({ email, password }) });
-    const body = await response.json(); if (!response.ok) return setMessage(body.error ?? "Authentication failed");
-    localStorage.setItem("accessToken", body.accessToken ?? ""); setToken(body.accessToken ?? null);
+    try {
+      const response = await fetch(`${API_URL}/auth/${path}`, { method: "POST", headers: { "content-type": "application/json" }, credentials: "include", body: JSON.stringify({ email, password }) });
+      const body = await response.json(); if (!response.ok) return setMessage(body.error ?? "Authentication failed");
+      if (!body.accessToken) return setMessage("Registration succeeded. Log in to continue.");
+      localStorage.setItem("accessToken", body.accessToken); setToken(body.accessToken);
+    } catch {
+      setMessage(`Cannot connect to the backend at ${API_URL}. Start the backend and try again.`);
+    }
   }
   async function loadPortfolio(accessToken: string) {
-    const response = await fetch(`${API_URL}/portfolio`, { headers: { Authorization: `Bearer ${accessToken}` } }); if (response.ok) setPortfolio((await response.json()).portfolio);
+    try {
+      const response = await fetch(`${API_URL}/portfolio`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (response.ok) setPortfolio((await response.json()).portfolio);
+      else if (response.status === 401) { localStorage.removeItem("accessToken"); setToken(null); }
+    } catch { setMessage(`Cannot connect to the backend at ${API_URL}.`); }
   }
   async function submitPaperTrade(event: FormEvent) {
-    event.preventDefault(); const response = await fetch(`${API_URL}/trades/add`, { method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ symbol, qty, price, side }) }); const body = await response.json();
-    setMessage(response.ok ? `${side} paper trade recorded` : body.error ?? "Trade rejected"); if (response.ok && token) await loadPortfolio(token);
+    event.preventDefault();
+    try {
+      const response = await fetch(`${API_URL}/trades/add`, { method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ symbol, qty, price, side }) }); const body = await response.json();
+      setMessage(response.ok ? `${side} paper trade recorded` : body.error ?? "Trade rejected"); if (response.ok && token) await loadPortfolio(token);
+    } catch { setMessage(`Cannot connect to the backend at ${API_URL}.`); }
   }
 
-  if (!token) return <main className="shell"><section className="panel" style={{ maxWidth: 420, margin: "15vh auto" }}><h1>Ultimate Trader</h1><p className="muted">Paper-trading dashboard</p><form className="stack" onSubmit={(event) => { event.preventDefault(); void authenticate("login"); }}><input placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} /><input placeholder="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><div className="row"><button className="primary" type="submit">Log in</button><button className="secondary" type="button" onClick={() => void authenticate("register")}>Register</button></div></form><p className="muted">{message}</p></section></main>;
+  if (!token) return <main className="shell"><section className="panel" style={{ maxWidth: 420, margin: "15vh auto" }}><h1>Ultimate Trader</h1><p className="muted">Paper-trading dashboard</p><form className="stack" suppressHydrationWarning onSubmit={(event) => { event.preventDefault(); void authenticate("login"); }}><input suppressHydrationWarning autoComplete="email" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} /><input suppressHydrationWarning autoComplete="current-password" placeholder="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /><div className="row"><button className="primary" type="submit">Log in</button><button className="secondary" type="button" onClick={() => void authenticate("register")}>Register</button></div></form><p className="muted">{message}</p></section></main>;
 
   return <main className="shell"><header className="header"><div><h1>Market cockpit</h1><span className="muted">Paper trading mode</span></div><button className="secondary" onClick={() => { localStorage.removeItem("accessToken"); setToken(null); }}>Log out</button></header>
     <section className="ticker">{watchlist.map((item) => <div className="panel ticker-card" key={item}><span className="muted">NSE · {item}</span><div className="metric">₹{(prices[item] ?? portfolio?.holdings.find((holding) => holding.symbol === item)?.lastPrice ?? 0).toFixed(2)}</div></div>)}</section>

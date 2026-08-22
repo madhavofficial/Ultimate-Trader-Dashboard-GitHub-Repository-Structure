@@ -1,36 +1,38 @@
 import { Router } from "express";
+import { prisma } from "../db/client";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
+import { writeAuditLog } from "../services/auditLog";
+import { tradeInputSchema } from "../utils/validation";
 
 const router = Router();
+router.use(authMiddleware);
 
-// temp trade history per user (in-memory)
-const userTrades = new Map<string, any[]>();
-
-router.get("/", authMiddleware, (req: AuthRequest, res) => {
-  const trades = userTrades.get(req.user!.id) || [];
-  return res.json({ ok: true, trades });
+router.get("/", async (req: AuthRequest, res, next) => {
+  try {
+    const trades = await prisma.trade.findMany({ where: { userId: req.user!.id }, orderBy: { timestamp: "desc" } });
+    return res.json({ ok: true, trades });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-router.post("/add", authMiddleware, (req: AuthRequest, res) => {
-  const { symbol, qty, price, side } = req.body;
-  if (!symbol || !qty || !price || !side) {
-    return res.status(400).json({ error: "Missing fields" });
+router.post("/add", async (req: AuthRequest, res, next) => {
+  try {
+    const input = tradeInputSchema.parse(req.body);
+    const trade = await prisma.trade.create({
+      data: {
+        symbol: input.symbol!,
+        qty: input.qty,
+        price: input.price,
+        side: input.side,
+        user: { connect: { id: req.user!.id } },
+      },
+    });
+    await writeAuditLog({ userId: req.user!.id, action: "CREATE", entityType: "Trade", entityId: trade.id, metadata: input, request: req });
+    return res.status(201).json({ ok: true, trade });
+  } catch (error) {
+    return next(error);
   }
-
-  const trades = userTrades.get(req.user!.id) || [];
-  const newTrade = {
-    id: trades.length + 1,
-    symbol,
-    qty,
-    price,
-    side,
-    timestamp: Date.now(),
-  };
-
-  trades.push(newTrade);
-  userTrades.set(req.user!.id, trades);
-
-  return res.json({ ok: true, message: "Trade added", trade: newTrade });
 });
 
 export default router;

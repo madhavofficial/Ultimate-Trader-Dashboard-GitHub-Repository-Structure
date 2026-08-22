@@ -16,12 +16,14 @@ model User {
   trades        Trade[]
   alerts        Alert[]
   holdings      Holding[]
+  auditLogs     AuditLog[]
 }
 
 model RefreshToken {
   id        String   @id @default(uuid())
   tokenHash String
   expiresAt DateTime
+  revokedAt DateTime?
   user      User     @relation(fields: [userId], references: [id])
   userId    String
 }
@@ -54,4 +56,52 @@ model Holding {
   avg       Float
   user      User     @relation(fields: [userId], references: [id])
   userId    String
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Event {
+  id          String    @id @default(uuid())
+  type        String
+  source      String
+  externalId  String?
+  payload     Json
+  occurredAt  DateTime?
+  ingestedAt  DateTime  @default(now())
+  processedAt DateTime?
+  status      String    @default("PENDING")
+  error       String?
+
+  @@unique([source, externalId])
+  @@index([status, ingestedAt])
+}
+
+model Job {
+  id          String    @id @default(uuid())
+  type        String
+  status      String    @default("PENDING")
+  payload     Json?
+  attempts    Int       @default(0)
+  runAt       DateTime  @default(now())
+  lockedAt    DateTime?
+  completedAt DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, runAt])
 }

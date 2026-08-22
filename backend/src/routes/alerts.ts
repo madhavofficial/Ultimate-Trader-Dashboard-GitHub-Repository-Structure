@@ -1,34 +1,37 @@
 import { Router } from "express";
+import { prisma } from "../db/client";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
+import { writeAuditLog } from "../services/auditLog";
+import { alertInputSchema } from "../utils/validation";
 
 const router = Router();
+router.use(authMiddleware);
 
-// temp per-user alerts
-const userAlerts = new Map<string, any[]>();
-
-router.get("/", authMiddleware, (req: AuthRequest, res) => {
-  const alerts = userAlerts.get(req.user!.id) || [];
-  return res.json({ ok: true, alerts });
+router.get("/", async (req: AuthRequest, res, next) => {
+  try {
+    const alerts = await prisma.alert.findMany({ where: { userId: req.user!.id }, orderBy: { createdAt: "desc" } });
+    return res.json({ ok: true, alerts });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-router.post("/add", authMiddleware, (req: AuthRequest, res) => {
-  const { symbol, condition, value } = req.body;
-  if (!symbol || !condition || value === undefined) {
-    return res.status(400).json({ error: "Missing fields" });
+router.post("/add", async (req: AuthRequest, res, next) => {
+  try {
+    const input = alertInputSchema.parse(req.body);
+    const alert = await prisma.alert.create({
+      data: {
+        symbol: input.symbol!,
+        condition: input.condition,
+        value: input.value,
+        user: { connect: { id: req.user!.id } },
+      },
+    });
+    await writeAuditLog({ userId: req.user!.id, action: "CREATE", entityType: "Alert", entityId: alert.id, metadata: input, request: req });
+    return res.status(201).json({ ok: true, alert });
+  } catch (error) {
+    return next(error);
   }
-
-  const alerts = userAlerts.get(req.user!.id) || [];
-  const newAlert = {
-    id: alerts.length + 1,
-    symbol,
-    condition,
-    value,
-  };
-
-  alerts.push(newAlert);
-  userAlerts.set(req.user!.id, alerts);
-
-  return res.json({ ok: true, message: "Alert added", alert: newAlert });
 });
 
 export default router;

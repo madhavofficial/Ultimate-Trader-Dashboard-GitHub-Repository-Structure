@@ -1,22 +1,17 @@
 import { Router } from "express";
+import { prisma } from "../db/client";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 
 const router = Router();
+router.use(authMiddleware);
 
-// temporary mock holdings
-let mockHoldings = [
-  { symbol: "INFY", qty: 10, avg: 1500 },
-  { symbol: "RELIANCE", qty: 5, avg: 2400 },
-  { symbol: "TCS", qty: 2, avg: 3800 },
-];
-
-// PROTECTED
-router.get("/", authMiddleware, (req: AuthRequest, res) => {
-  return res.json({
-    ok: true,
-    user: req.user,
-    holdings: mockHoldings,
-  });
+router.get("/", async (req: AuthRequest, res, next) => {
+  try {
+    const holdings = await prisma.holding.findMany({ where: { userId: req.user!.id }, orderBy: { symbol: "asc" } });
+    return res.json({ ok: true, user: req.user, holdings });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 export default router;

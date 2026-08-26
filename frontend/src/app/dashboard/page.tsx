@@ -110,6 +110,47 @@ type TriggeredToast = {
   message: string;
 };
 
+type SearchInstrument = {
+  instrumentToken: number;
+  tradingsymbol: string;
+  name: string;
+  exchange: string;
+  segment: string;
+};
+
+type BrokerMargins = {
+  equity?: {
+    enabled: boolean;
+    net: number;
+    available: {
+      cash: number;
+      collateral: number;
+      intraday_payin: number;
+      live_balance: number;
+    };
+    utilised: {
+      debits: number;
+      exposure: number;
+      m2m_realised: number;
+      m2m_unrealised: number;
+      option_premium: number;
+      span: number;
+    };
+  };
+};
+
+type BrokerOrder = {
+  order_id: string;
+  tradingsymbol: string;
+  exchange: string;
+  transaction_type: string;
+  order_type: string;
+  quantity: number;
+  price: number;
+  status: string;
+  order_timestamp: string;
+};
+
 type Tick = { symbol?: string; last_price: number };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -119,7 +160,7 @@ export default function DashboardPage() {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [activeTab, setActiveTab] = useState<"EXECUTION" | "INTELLIGENCE" | "SIGNALS" | "ANALYTICS" | "RISK">("EXECUTION");
+  const [activeTab, setActiveTab] = useState<"EXECUTION" | "INTELLIGENCE" | "SIGNALS" | "ANALYTICS" | "RISK" | "BROKER">("EXECUTION");
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [prices, setPrices] = useState<Record<string, number>>({});
@@ -133,7 +174,18 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [toasts, setToasts] = useState<TriggeredToast[]>([]);
 
-  // Paper trade state
+  // Broker states
+  const [brokerMargins, setBrokerMargins] = useState<BrokerMargins | null>(null);
+  const [brokerOrders, setBrokerOrders] = useState<BrokerOrder[]>([]);
+  const [executionMode, setExecutionMode] = useState<"PAPER" | "LIVE_BROKER">("PAPER");
+
+  // Dynamic Watchlist & Search state
+  const [dynamicWatchlist, setDynamicWatchlist] = useState<string[]>(["INFY", "RELIANCE", "TCS", "ASIANPAINT", "INDIGO"]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchInstrument[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Trade form state
   const [symbol, setSymbol] = useState("INFY");
   const [qty, setQty] = useState("5");
   const [price, setPrice] = useState("1520");
@@ -145,8 +197,6 @@ export default function DashboardPage() {
   const [alertCondition, setAlertCondition] = useState<"GT" | "LT">("GT");
   const [alertValue, setAlertValue] = useState("1550");
   const [alertMessage, setAlertMessage] = useState("");
-
-  const watchlist = useMemo(() => ["INFY", "RELIANCE", "TCS", "ASIANPAINT", "INDIGO"], []);
 
   useEffect(() => {
     setToken(localStorage.getItem("accessToken"));
@@ -214,6 +264,34 @@ export default function DashboardPage() {
     void loadCandles(selectedChartSymbol, token);
   }, [selectedChartSymbol, token]);
 
+  // Debounced instrument search
+  useEffect(() => {
+    if (!token || searchQuery.trim().length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_URL}/market/search?q=${encodeURIComponent(searchQuery)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.instruments ?? []);
+        }
+      } catch {
+        // search failure ignored
+      } finally {
+        setIsSearching(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, token]);
+
   async function loadAllData(accessToken: string) {
     await Promise.all([
       loadPortfolio(accessToken),
@@ -223,6 +301,7 @@ export default function DashboardPage() {
       loadRiskSettings(accessToken),
       loadMarketStatus(accessToken),
       loadAlerts(accessToken),
+      loadBrokerData(accessToken),
     ]);
   }
 
@@ -274,7 +353,7 @@ export default function DashboardPage() {
   }
 
   async function loadCandles(chartSym: string, accessToken: string) {
-    const res = await fetch(`${API_URL}/market/candles?symbol=${chartSym}&count=50&interval=5`, {
+    const res = await fetch(`${API_URL}/market/candles?symbol=${chartSym}&count=50&interval=5minute`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (res.ok) setCandles((await res.json()).candles ?? []);
@@ -285,9 +364,50 @@ export default function DashboardPage() {
     if (res.ok) setAlerts((await res.json()).alerts ?? []);
   }
 
-  async function submitPaperTrade(e: FormEvent) {
+  async function loadBrokerData(accessToken: string) {
+    try {
+      const [marginsRes, ordersRes] = await Promise.all([
+        fetch(`${API_URL}/broker/kite/margins`, { headers: { Authorization: `Bearer ${accessToken}` } }),
+        fetch(`${API_URL}/broker/kite/orders`, { headers: { Authorization: `Bearer ${accessToken}` } }),
+      ]);
+      if (marginsRes.ok) setBrokerMargins((await marginsRes.json()).margins);
+      if (ordersRes.ok) setBrokerOrders((await ordersRes.json()).orders ?? []);
+    } catch {
+      // Broker may not be linked yet
+    }
+  }
+
+  async function submitTrade(e: FormEvent) {
     e.preventDefault();
     setTradeMessage("");
+
+    if (executionMode === "LIVE_BROKER") {
+      const confirmed = window.confirm(`⚠️ CONFIRM REAL ZERODHA LIVE ORDER:\n\n${side} ${qty} shares of ${symbol} @ ₹${price}\n\nThis will send a live order to the exchange!`);
+      if (!confirmed) return;
+
+      const res = await fetch(`${API_URL}/broker/kite/orders`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          symbol,
+          transaction_type: side,
+          order_type: "LIMIT",
+          quantity: Number(qty),
+          price: Number(price),
+          product: "CNC",
+        }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        setTradeMessage(`🚀 LIVE ORDER PLACED with Zerodha (Order ID: ${body.orderResult?.order_id ?? "OK"})`);
+        if (token) void loadBrokerData(token);
+      } else {
+        setTradeMessage(`❌ LIVE ORDER REJECTED: ${body.error ?? "Failed"}`);
+      }
+      return;
+    }
+
+    // Default Paper Trade
     const res = await fetch(`${API_URL}/trades/add`, {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
@@ -364,12 +484,34 @@ export default function DashboardPage() {
     void loadSignals(token);
   }
 
+  async function connectZerodha() {
+    if (!token) return;
+    const res = await fetch(`${API_URL}/broker/kite/login`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    }
+  }
+
+  function addSymbolToWatchlist(newSym: string) {
+    if (!dynamicWatchlist.includes(newSym)) {
+      setDynamicWatchlist([...dynamicWatchlist, newSym]);
+    }
+    setSelectedChartSymbol(newSym);
+    setSymbol(newSym);
+    setAlertSymbol(newSym);
+    setSearchQuery("");
+    setSearchResults([]);
+  }
+
   if (!token) {
     return (
       <main className="shell">
         <section className="panel" style={{ maxWidth: 420, margin: "15vh auto" }}>
           <h1>Ultimate Trader</h1>
-          <p className="muted">Indian Markets Intelligence &amp; Quantitative Cockpit</p>
+          <p className="muted">Indian Equities Intelligence &amp; Quantitative Cockpit</p>
           <form className="stack" onSubmit={(e) => { e.preventDefault(); void authenticate("login"); }}>
             <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
             <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -410,7 +552,7 @@ export default function DashboardPage() {
               </span>
             )}
           </div>
-          <span className="muted">{marketStatus?.message ?? "Continuous live tick streaming & multi-factor alpha"}</span>
+          <span className="muted">{marketStatus?.message ?? "Live tick streaming, AI decision support & multi-factor alpha"}</span>
         </div>
         <div className="row">
           <button className="secondary" onClick={triggerNewsSync}>🔄 Sync News</button>
@@ -424,9 +566,38 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* Top Live Watchlist Bar */}
+      {/* Dynamic Watchlist Bar with Search Autocomplete */}
+      <div className="row" style={{ marginBottom: 12, position: "relative" }}>
+        <input
+          placeholder="🔍 Search NSE Symbol (e.g. TATA, HDFC, RELIANCE)..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{ maxWidth: 380 }}
+        />
+        {isSearching && <span className="muted" style={{ fontSize: 12 }}>Searching...</span>}
+
+        {/* Autocomplete Dropdown */}
+        {searchResults.length > 0 && (
+          <div style={{ position: "absolute", top: 44, left: 0, width: 380, background: "#131b30", border: "1px solid var(--line)", borderRadius: 8, zIndex: 100, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", maxHeight: 220, overflowY: "auto" }}>
+            {searchResults.map((item) => (
+              <div
+                key={item.instrumentToken}
+                onClick={() => addSymbolToWatchlist(item.tradingsymbol)}
+                style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", cursor: "pointer", display: "flex", justifyContent: "space-between" }}
+              >
+                <div>
+                  <strong>{item.tradingsymbol}</strong>
+                  <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{item.name}</span>
+                </div>
+                <span className="badge badge-blue">{item.exchange}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <section className="ticker">
-        {watchlist.map((item) => {
+        {dynamicWatchlist.map((item) => {
           const currentPrice = prices[item] ?? portfolio?.holdings.find((h) => h.symbol === item)?.lastPrice ?? 0;
           const isSelected = selectedChartSymbol === item;
           return (
@@ -463,10 +634,13 @@ export default function DashboardPage() {
           ⚡ Multi-Factor Signals ({signals.length})
         </button>
         <button className={activeTab === "ANALYTICS" ? "primary" : "secondary"} onClick={() => setActiveTab("ANALYTICS")}>
-          📈 Quant Performance &amp; Journal
+          📈 Quant Analytics
         </button>
         <button className={activeTab === "RISK" ? "primary" : "secondary"} onClick={() => setActiveTab("RISK")}>
           🛡️ Risk Controls
+        </button>
+        <button className={activeTab === "BROKER" ? "primary" : "secondary"} onClick={() => setActiveTab("BROKER")}>
+          🔗 Zerodha Broker &amp; Margins
         </button>
       </div>
 
@@ -477,7 +651,7 @@ export default function DashboardPage() {
           <section className="panel wide">
             <h2>
               Holdings &amp; Real-Time Valuation
-              <span className="badge badge-blue">Paper Ledger</span>
+              <span className="badge badge-blue">Virtual Ledger</span>
             </h2>
             <div className="row" style={{ gap: 24, marginBottom: 14 }}>
               <div>
@@ -524,17 +698,38 @@ export default function DashboardPage() {
                 ))}
                 {(!portfolio?.holdings || portfolio.holdings.length === 0) && (
                   <tr>
-                    <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>No open holdings. Place a paper trade below.</td>
+                    <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>No open holdings. Place a trade below.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </section>
 
-          {/* Paper Trade Placement Drawer */}
+          {/* Trade Placement Drawer */}
           <section className="panel side">
-            <h2>Paper Order Execution</h2>
-            <form className="stack" onSubmit={submitPaperTrade}>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+              <h2>Order Execution</h2>
+              <div className="row" style={{ gap: 4 }}>
+                <button
+                  type="button"
+                  className={executionMode === "PAPER" ? "primary" : "secondary"}
+                  style={{ fontSize: 11, padding: "4px 8px" }}
+                  onClick={() => setExecutionMode("PAPER")}
+                >
+                  Paper
+                </button>
+                <button
+                  type="button"
+                  className={executionMode === "LIVE_BROKER" ? "primary" : "secondary"}
+                  style={{ fontSize: 11, padding: "4px 8px" }}
+                  onClick={() => setExecutionMode("LIVE_BROKER")}
+                >
+                  Live (Zerodha)
+                </button>
+              </div>
+            </div>
+
+            <form className="stack" onSubmit={submitTrade}>
               <div className="row">
                 <input
                   value={symbol}
@@ -564,10 +759,16 @@ export default function DashboardPage() {
                 />
               </div>
               <div className="muted" style={{ fontSize: 11 }}>
-                Estimated Order Value: ₹{(Number(qty || 0) * Number(price || 0)).toLocaleString("en-IN")} · Est. Statutory Tax (STT/GST): ₹{((Number(qty || 0) * Number(price || 0)) * 0.0012).toFixed(2)}
+                Order Value: ₹{(Number(qty || 0) * Number(price || 0)).toLocaleString("en-IN")} · Est. Statutory Tax (STT/GST): ₹{((Number(qty || 0) * Number(price || 0)) * 0.0012).toFixed(2)}
               </div>
-              <button className="primary" type="submit" disabled={riskSettings?.killSwitchActive}>
-                {riskSettings?.killSwitchActive ? "Blocked by Kill Switch" : `Place ${side} Order`}
+              <button
+                className={executionMode === "LIVE_BROKER" ? "danger" : "primary"}
+                type="submit"
+                disabled={riskSettings?.killSwitchActive}
+              >
+                {riskSettings?.killSwitchActive
+                  ? "Blocked by Kill Switch"
+                  : `${executionMode === "LIVE_BROKER" ? "🚀 Live Zerodha" : "Place"} ${side} Order`}
               </button>
             </form>
             {tradeMessage && <p className="muted" style={{ marginTop: 10 }}>{tradeMessage}</p>}
@@ -635,7 +836,7 @@ export default function DashboardPage() {
                 );
               })}
             </div>
-            <span className="muted">Hover candles to view OHLCV. Switch symbol in watchlist above to re-render charts.</span>
+            <span className="muted">Hover candles to view OHLCV. Select another ticker in watchlist to re-chart.</span>
           </section>
         </div>
       )}
@@ -646,7 +847,7 @@ export default function DashboardPage() {
           <section className="panel wide">
             <h2>
               Market Intelligence &amp; Event Stream
-              <span className="badge badge-purple">NLP Enriched</span>
+              <span className="badge badge-purple">AI / RSS Ingested</span>
             </h2>
             <div style={{ display: "grid", gap: 12 }}>
               {events.map((ev) => (
@@ -830,10 +1031,6 @@ export default function DashboardPage() {
                 <span className="muted">Max Single Sector Concentration</span>
                 <div className="metric">{riskSettings?.maxSectorExposurePct ?? 35}%</div>
               </div>
-              <div>
-                <span className="muted">Default Stop-Loss / Take-Profit</span>
-                <div className="metric">{riskSettings?.stopLossDefaultPct ?? 2}% SL / {riskSettings?.takeProfitDefaultPct ?? 4}% TP</div>
-              </div>
             </div>
           </section>
 
@@ -852,6 +1049,75 @@ export default function DashboardPage() {
                 {riskSettings?.killSwitchActive ? "🛡️ Kill Switch is ACTIVE (Click to Unlock)" : "🛑 Activate Emergency Kill Switch"}
               </button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 6: ZERODHA BROKER & MARGINS */}
+      {activeTab === "BROKER" && (
+        <div className="grid">
+          <section className="panel wide">
+            <h2>
+              Zerodha Kite Connection &amp; Live Margins
+              <button className="primary" onClick={connectZerodha}>🔗 Connect Zerodha (OAuth)</button>
+            </h2>
+
+            {brokerMargins?.equity && (
+              <div className="grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 18 }}>
+                <div className="panel" style={{ background: "#0c1222" }}>
+                  <span className="muted">Available Cash</span>
+                  <div className="metric">₹{brokerMargins.equity.available.cash.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="panel" style={{ background: "#0c1222" }}>
+                  <span className="muted">Collateral Margin</span>
+                  <div className="metric">₹{brokerMargins.equity.available.collateral.toLocaleString("en-IN")}</div>
+                </div>
+                <div className="panel" style={{ background: "#0c1222" }}>
+                  <span className="muted">Utilized SPAN &amp; Exposure</span>
+                  <div className="metric">₹{brokerMargins.equity.utilised.exposure.toLocaleString("en-IN")}</div>
+                </div>
+              </div>
+            )}
+
+            <h3>Live Orders</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Order ID</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Type</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {brokerOrders.map((o) => (
+                  <tr key={o.order_id}>
+                    <td><code>{o.order_id}</code></td>
+                    <td><strong>{o.tradingsymbol}</strong></td>
+                    <td className={o.transaction_type === "BUY" ? "positive" : "negative"}>{o.transaction_type}</td>
+                    <td>{o.order_type}</td>
+                    <td>{o.quantity}</td>
+                    <td>₹{o.price}</td>
+                    <td><span className="badge badge-blue">{o.status}</span></td>
+                  </tr>
+                ))}
+                {brokerOrders.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>No active broker orders placed today.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="panel side">
+            <h2>Broker Settings</h2>
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Zerodha Kite session tokens expire at 06:00 AM IST daily per SEBI mandate. Re-authenticate each morning before market open.
+            </p>
           </section>
         </div>
       )}

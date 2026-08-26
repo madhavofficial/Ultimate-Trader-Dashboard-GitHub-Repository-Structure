@@ -62,4 +62,3 @@ test("rejects market orders when no live reference price is discoverable", async
     }
   );
 });
-

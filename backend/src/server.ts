@@ -16,7 +16,9 @@ import intelligenceRoutes from "./routes/intelligence";
 import riskRoutes from "./routes/risk";
 import signalsRoutes from "./routes/signals";
 import analyticsRoutes from "./routes/analytics";
+import notificationsRoutes from "./routes/notifications";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
+
 import { prisma } from "./db/client";
 import jwt from "jsonwebtoken";
 import { userRoom } from "./services/socketRooms";
@@ -66,7 +68,9 @@ app.use("/intelligence", intelligenceRoutes);
 app.use("/risk", riskRoutes);
 app.use("/signals", signalsRoutes);
 app.use("/analytics", analyticsRoutes);
+app.use("/notifications", notificationsRoutes);
 app.use(notFoundHandler);
+
 app.use(errorHandler);
 
 

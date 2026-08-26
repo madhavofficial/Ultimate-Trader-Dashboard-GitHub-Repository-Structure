@@ -20,7 +20,11 @@ const envSchema = z.object({
   KITE_SYNC_USER_ID: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().uuid().optional()),
   GEMINI_API_KEY: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
   OPENAI_API_KEY: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
+  TELEGRAM_BOT_TOKEN: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
+  TELEGRAM_CHAT_ID: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
+  WEBHOOK_URL: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().url().optional()),
 });
 
 export const env = envSchema.parse(process.env);
+
 

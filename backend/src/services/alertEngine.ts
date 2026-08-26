@@ -2,6 +2,8 @@ import { Server } from "socket.io";
 import { prisma } from "../db/client";
 import { userRoom } from "./socketRooms";
 import { writeAuditLog } from "./auditLog";
+import { dispatchNotification } from "./notificationService";
+
 
 export interface PriceTick {
   symbol?: string;
@@ -63,8 +65,15 @@ export async function evaluateAlertsOnTicks(io: Server, ticks: PriceTick[]) {
         message: `Alert triggered: ${alert.symbol} reached ₹${currentPrice.toFixed(2)} (${alert.condition} ₹${alert.value})`,
       };
 
-      // Push real-time notification to user's private Socket.IO room
-      io.to(userRoom(alert.userId)).emit("alert:triggered", payload);
+      // Dispatch across all channels (In-App, Telegram, Webhook) & persist in database
+      await dispatchNotification({
+        userId: alert.userId,
+        alertId: alert.id,
+        symbol: alert.symbol,
+        title: `Price Alert: ${alert.symbol}`,
+        message: `Price reached ₹${currentPrice.toFixed(2)} (${alert.condition} ₹${alert.value})`,
+        io,
+      });
 
       // Audit log the alert trigger
       void writeAuditLog({
@@ -74,6 +83,7 @@ export async function evaluateAlertsOnTicks(io: Server, ticks: PriceTick[]) {
         entityId: alert.id,
         metadata: payload,
       });
+
     } else {
       activeAlerts.delete(alert.id);
     }

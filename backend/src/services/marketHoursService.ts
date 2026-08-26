@@ -9,13 +9,17 @@ export interface MarketStatus {
 }
 
 export function getCurrentMarketStatus(date = new Date()): MarketStatus {
-  // Convert to Indian Standard Time (UTC + 5:30)
-  const utc = date.getTime() + date.getTimezoneOffset() * 60000;
-  const istDate = new Date(utc + 5.5 * 3600000);
-
-  const day = istDate.getDay(); // 0 = Sun, 6 = Sat
-  const hours = istDate.getHours();
-  const minutes = istDate.getMinutes();
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(values.weekday);
+  const hours = Number(values.hour);
+  const minutes = Number(values.minute);
   const totalMinutes = hours * 60 + minutes;
 
   const istTimeString = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} IST`;
@@ -107,6 +111,6 @@ export function calculateStatutoryCharges(turnover: number, isDelivery = true, i
     stampDuty: Number(stampDuty.toFixed(2)),
     gst: Number(gst.toFixed(2)),
     totalCharges: Number(totalCharges.toFixed(2)),
-    effectivePct: Number(((totalCharges / turnover) * 100).toFixed(4)),
+    effectivePct: turnover > 0 ? Number(((totalCharges / turnover) * 100).toFixed(4)) : 0,
   };
 }

@@ -83,19 +83,23 @@ export async function computeUserAnalytics(userId: string): Promise<AnalyticsSum
     }
   }
 
-  // Sector-wise PnL Breakdown
+  // Sector-wise realized PnL breakdown. A buy has no realized PnL, so use the
+  // ledger's trade reference instead of counting every order as a result.
+  const tradesById = new Map(trades.map((trade) => [trade.id, trade]));
   const sectorMap = new Map<string, { count: number; pnl: number }>();
-  for (const t of trades) {
+  for (const entry of ledgerEntries) {
+    const trade = entry.tradeId ? tradesById.get(entry.tradeId) : undefined;
+    if (!trade) continue;
     let sector = "General Equities";
     for (const [_, data] of Object.entries(SECTOR_KNOWLEDGE_GRAPH)) {
-      if (data.directSymbols.includes(t.symbol)) {
+      if (data.directSymbols.includes(trade.symbol)) {
         sector = data.sector;
         break;
       }
     }
 
     const prev = sectorMap.get(sector) ?? { count: 0, pnl: 0 };
-    sectorMap.set(sector, { count: prev.count + 1, pnl: prev.pnl });
+    sectorMap.set(sector, { count: prev.count + 1, pnl: prev.pnl + Number(entry.realizedPnl ?? 0) });
   }
 
   const sectorBreakdown = Array.from(sectorMap.entries()).map(([sector, val]) => ({

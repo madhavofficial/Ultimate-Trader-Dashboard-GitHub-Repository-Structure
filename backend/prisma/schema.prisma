@@ -21,6 +21,7 @@ model User {
   brokerSessions BrokerSession[]
   portfolioAccount PortfolioAccount?
   ledgerEntries CashLedgerEntry[]
+  positions     Position[]
 }
 
 model RefreshToken {
@@ -129,6 +130,7 @@ model BrokerSession {
   provider             String   @default("ZERODHA")
   brokerUserId         String?
   accessTokenEncrypted String
+  profile              Json?
   expiresAt            DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -183,4 +185,25 @@ model Instrument {
   @@index([tradingsymbol])
   @@index([name])
   @@index([instrumentToken])
+}
+
+model Position {
+  id             String   @id @default(uuid())
+  userId         String
+  exchange       String
+  symbol         String
+  product        String
+  instrumentToken Int
+  quantity       Int
+  averagePrice   Decimal  @db.Decimal(20, 8)
+  lastPrice      Decimal  @db.Decimal(20, 8)
+  pnl            Decimal  @db.Decimal(20, 8)
+  m2m            Decimal  @db.Decimal(20, 8)
+  unrealized     Decimal  @db.Decimal(20, 8)
+  realized       Decimal  @db.Decimal(20, 8)
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, exchange, symbol, product])
+  @@index([userId, updatedAt])
 }

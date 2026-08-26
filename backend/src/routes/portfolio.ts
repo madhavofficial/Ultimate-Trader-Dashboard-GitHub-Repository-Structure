@@ -10,7 +10,11 @@ router.use(authMiddleware);
 router.get("/", async (req: AuthRequest, res, next) => {
   try {
     await ensurePortfolioAccount(req.user!.id);
-    return res.json({ ok: true, user: req.user, portfolio: await getPortfolioSnapshot(req.user!.id) });
+    const [portfolio, positions] = await Promise.all([
+      getPortfolioSnapshot(req.user!.id),
+      prisma.position.findMany({ where: { userId: req.user!.id }, orderBy: { symbol: "asc" } }),
+    ]);
+    return res.json({ ok: true, user: req.user, portfolio, positions });
   } catch (error) {
     return next(error);
   }

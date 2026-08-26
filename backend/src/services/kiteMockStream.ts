@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import { updateLtpAndBroadcast } from "./portfolioService";
+import { evaluateAlertsOnTicks } from "./alertEngine";
 
 export function startMockKiteStream(io: Server) {
   console.log("Starting mock Kite market stream...");
@@ -28,6 +29,7 @@ export function startMockKiteStream(io: Server) {
 
     io.emit("tick", ticks);
     void updateLtpAndBroadcast(io, ticks);
+    void evaluateAlertsOnTicks(io, ticks);
     console.log("ticks:", ticks);
   }, 1000);
 }

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
-import { completeKiteLogin, createKiteLoginUrl, syncKiteHoldings } from "../services/kiteService";
+import { completeKiteLogin, createKiteLoginUrl, syncKiteAccount, syncKiteHoldings } from "../services/kiteService";
 import { writeAuditLog } from "../services/auditLog";
 import { startKiteTicker, stopKiteTicker } from "../services/streamHandler";
 
@@ -31,6 +31,16 @@ router.post("/sync/holdings", authMiddleware, async (req: AuthRequest, res, next
     const holdings = await syncKiteHoldings(req.user!.id);
     await writeAuditLog({ userId: req.user!.id, action: "SYNC_HOLDINGS", entityType: "Holding", metadata: { count: holdings.length }, request: req });
     return res.json({ ok: true, holdings });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/sync/account", authMiddleware, async (req: AuthRequest, res, next) => {
+  try {
+    const result = await syncKiteAccount(req.user!.id);
+    await writeAuditLog({ userId: req.user!.id, action: "SYNC_ACCOUNT", entityType: "BrokerSession", metadata: { holdings: result.holdings.length, positions: result.positions.length }, request: req });
+    return res.json({ ok: true, profile: result.profile, holdings: result.holdings, positions: result.positions });
   } catch (error) {
     return next(error);
   }

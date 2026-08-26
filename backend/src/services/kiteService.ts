@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { KiteConnect } from "kiteconnect";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { env } from "../config/env";
 import { AppError } from "../errors/appError";
@@ -35,11 +36,14 @@ export async function completeKiteLogin(state: string, requestToken: string) {
 
   const client = new KiteConnect({ api_key: config.apiKey });
   const session = await client.generateSession(requestToken, config.apiSecret);
+  client.setAccessToken(session.access_token);
+  const profile = await client.getProfile();
   await prisma.brokerSession.upsert({
     where: { userId_provider: { userId: payload.userId, provider: PROVIDER } },
     update: {
       brokerUserId: session.user_id,
       accessTokenEncrypted: encryptToken(session.access_token, config.encryptionKey),
+      profile: profile as unknown as Prisma.InputJsonValue,
       expiresAt: nextKiteExpiry(),
     },
     create: {
@@ -47,6 +51,7 @@ export async function completeKiteLogin(state: string, requestToken: string) {
       provider: PROVIDER,
       brokerUserId: session.user_id,
       accessTokenEncrypted: encryptToken(session.access_token, config.encryptionKey),
+      profile: profile as unknown as Prisma.InputJsonValue,
       expiresAt: nextKiteExpiry(),
     },
   });
@@ -72,10 +77,17 @@ export async function getKiteTickerCredentials(userId: string) {
 }
 
 export async function syncKiteHoldings(userId: string) {
+  return (await syncKiteAccount(userId)).holdings;
+}
+
+export async function syncKiteAccount(userId: string) {
   const client = await getKiteClient(userId);
-  const holdings = await client.getHoldings();
+  const [profile, holdings, positionsResponse] = await Promise.all([client.getProfile(), client.getHoldings(), client.getPositions()]);
+  const positions = positionsResponse.net;
+  const session = await prisma.brokerSession.findUniqueOrThrow({ where: { userId_provider: { userId, provider: PROVIDER } } });
 
   await prisma.$transaction(async (tx) => {
+    await tx.brokerSession.update({ where: { id: session.id }, data: { profile: profile as unknown as Prisma.InputJsonValue } });
     await tx.holding.deleteMany({ where: { userId } });
     if (holdings.length > 0) {
       await tx.holding.createMany({
@@ -87,9 +99,28 @@ export async function syncKiteHoldings(userId: string) {
         })),
       });
     }
+    await tx.position.deleteMany({ where: { userId } });
+    if (positions.length > 0) {
+      await tx.position.createMany({
+        data: positions.map((position) => ({
+          userId,
+          exchange: position.exchange,
+          symbol: position.tradingsymbol,
+          product: position.product,
+          instrumentToken: position.instrument_token,
+          quantity: position.quantity,
+          averagePrice: new Prisma.Decimal(position.average_price),
+          lastPrice: new Prisma.Decimal(position.last_price),
+          pnl: new Prisma.Decimal(position.pnl),
+          m2m: new Prisma.Decimal(position.m2m),
+          unrealized: new Prisma.Decimal(position.unrealised),
+          realized: new Prisma.Decimal(position.realised),
+        })),
+      });
+    }
   });
 
-  return holdings;
+  return { profile, holdings, positions };
 }
 
 function encryptToken(token: string, key: Buffer) {

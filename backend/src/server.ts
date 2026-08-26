@@ -12,16 +12,31 @@ import tradeRoutes from "./routes/trades";
 import alertRoutes from "./routes/alerts";
 import kiteRoutes from "./routes/kite";
 import marketRoutes from "./routes/market";
+import intelligenceRoutes from "./routes/intelligence";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { prisma } from "./db/client";
 import jwt from "jsonwebtoken";
 import { userRoom } from "./services/socketRooms";
 import { startInstrumentSyncScheduler } from "./services/instrumentService";
+import { startNewsWorkerScheduler, stopNewsWorkerScheduler } from "./workers/newsWorker";
+
+
+const corsOrigins = [env.CORS_ORIGIN, "http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001"];
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin || corsOrigins.includes(origin) || (env.NODE_ENV !== "production" && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+};
 
 export const app = express();
 app.disable("x-powered-by");
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 app.use(rateLimit({ windowMs: 60 * 1000, max: 120 }));
 
@@ -44,13 +59,15 @@ app.use("/trades", tradeRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/broker/kite", kiteRoutes);
 app.use("/market", marketRoutes);
+app.use("/intelligence", intelligenceRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 export function createHttpServer() {
   const server = http.createServer(app);
-  const io = new Server(server, { cors: { origin: env.CORS_ORIGIN, credentials: true } });
+  const io = new Server(server, { cors: corsOptions });
   app.set("io", io);
+
 
   if (env.MARKET_DATA_MODE === "kite") {
     io.use((socket, next) => {
@@ -81,6 +98,7 @@ export function createHttpServer() {
   });
 
   if (env.MARKET_DATA_MODE === "mock") startMockKiteStream(io);
+  startNewsWorkerScheduler(io);
   return server;
 }
 
@@ -93,9 +111,11 @@ export async function startServer() {
 
   const shutdown = async () => {
     stopInstrumentScheduler?.();
+    stopNewsWorkerScheduler();
     server.close();
     await prisma.$disconnect();
   };
+
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }

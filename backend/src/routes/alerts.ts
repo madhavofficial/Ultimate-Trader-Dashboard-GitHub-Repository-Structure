@@ -34,4 +34,18 @@ router.post("/add", async (req: AuthRequest, res, next) => {
   }
 });
 
+router.delete("/:id", async (req: AuthRequest, res, next) => {
+  try {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) return res.status(400).json({ error: "Missing alert id" });
+    await prisma.alert.deleteMany({ where: { id, userId: req.user!.id } });
+    await writeAuditLog({ userId: req.user!.id, action: "DELETE", entityType: "Alert", entityId: id, request: req });
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+
 export default router;
+

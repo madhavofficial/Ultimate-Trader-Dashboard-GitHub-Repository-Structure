@@ -62,4 +62,65 @@ router.post("/stream/stop", authMiddleware, (req: AuthRequest, res) => {
   return res.json({ ok: true });
 });
 
+// GET /broker/kite/margins
+router.get("/margins", authMiddleware, async (req: AuthRequest, res, next) => {
+  try {
+    const { getKiteMargins } = await import("../services/kiteService");
+    const margins = await getKiteMargins(req.user!.id);
+    return res.json({ ok: true, margins });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// GET /broker/kite/orders
+router.get("/orders", authMiddleware, async (req: AuthRequest, res, next) => {
+  try {
+    const { getKiteOrders } = await import("../services/kiteService");
+    const orders = await getKiteOrders(req.user!.id);
+    return res.json({ ok: true, orders });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// POST /broker/kite/orders — Live Order Execution with Double Confirmation
+router.post("/orders", authMiddleware, async (req: AuthRequest, res, next) => {
+  try {
+    const schema = z.object({
+      symbol: z.string().trim().min(1).transform((s) => s.toUpperCase()),
+      exchange: z.enum(["NSE", "BSE"]).default("NSE"),
+      transaction_type: z.enum(["BUY", "SELL"]),
+      order_type: z.enum(["MARKET", "LIMIT", "SL", "SL-M"]).default("MARKET"),
+      quantity: z.number().int().positive().safe(),
+      price: z.number().positive().optional(),
+      trigger_price: z.number().positive().optional(),
+      product: z.enum(["CNC", "MIS", "NRML"]).default("CNC"),
+      validity: z.enum(["DAY", "IOC"]).default("DAY"),
+      tag: z.string().max(16).optional(),
+    });
+
+    const body = schema.parse(req.body);
+    const { placeKiteLiveOrder } = await import("../services/kiteService");
+    const orderResult = await placeKiteLiveOrder(req.user!.id, {
+      ...body,
+      symbol: body.symbol,
+    });
+
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "LIVE_ORDER_PLACED",
+      entityType: "Trade",
+      metadata: { ...body, orderResult: orderResult as any },
+      request: req,
+    });
+
+
+    return res.json({ ok: true, orderResult });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 export default router;
+

@@ -5,6 +5,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { env } from "../config/env";
 import { AppError } from "../errors/appError";
+import { validatePreTradeRisk } from "./riskEngine";
+
 
 const PROVIDER = "ZERODHA";
 
@@ -122,6 +124,76 @@ export async function syncKiteAccount(userId: string) {
 
   return { profile, holdings, positions };
 }
+
+export async function getKiteMargins(userId: string) {
+  const client = await getKiteClient(userId);
+  return client.getMargins("equity");
+}
+
+export async function getKiteOrders(userId: string) {
+  const client = await getKiteClient(userId);
+  return client.getOrders();
+}
+
+export async function placeKiteLiveOrder(
+  userId: string,
+  params: {
+    symbol: string;
+    exchange?: string;
+    transaction_type: "BUY" | "SELL";
+    order_type: "MARKET" | "LIMIT" | "SL" | "SL-M";
+    quantity: number;
+    price?: number;
+    trigger_price?: number;
+    product?: "CNC" | "MIS" | "NRML";
+    validity?: "DAY" | "IOC";
+    tag?: string;
+  }
+) {
+  // 1. Mandatory Pre-Trade Risk Check
+  await validatePreTradeRisk({
+    userId,
+    symbol: params.symbol,
+    qty: params.quantity,
+    price: params.price ?? 100, // conservative estimate for market orders
+    side: params.transaction_type,
+  });
+
+  const client = await getKiteClient(userId);
+  const variety = "regular";
+
+  const orderResponse = await client.placeOrder(variety, {
+    exchange: (params.exchange ?? "NSE") as any,
+    tradingsymbol: params.symbol,
+    transaction_type: params.transaction_type,
+    order_type: params.order_type,
+    quantity: params.quantity,
+    price: params.price,
+    trigger_price: params.trigger_price,
+    product: params.product ?? "CNC",
+    validity: params.validity ?? "DAY",
+    tag: params.tag ?? "UTD",
+  });
+
+
+  // Log in Trade Journal and Audit Log
+  await prisma.tradeJournal.create({
+    data: {
+      userId,
+      tradeId: (orderResponse as any)?.order_id,
+      symbol: params.symbol,
+      side: params.transaction_type,
+      qty: params.quantity,
+      price: new Prisma.Decimal(params.price ?? 0),
+      strategyTag: params.tag ?? "MANUAL_LIVE",
+      conviction: 4,
+      notes: `Live order placed via Kite Connect: ${params.order_type} ${params.quantity} @ ₹${params.price ?? 'MKT'}`,
+    },
+  });
+
+  return orderResponse;
+}
+
 
 function encryptToken(token: string, key: Buffer) {
   const iv = crypto.randomBytes(12);

@@ -18,6 +18,9 @@ const envSchema = z.object({
   KITE_REDIRECT_URL: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().url().optional()),
   KITE_TOKEN_ENCRYPTION_KEY: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().regex(/^[0-9a-fA-F]{64}$/).optional()),
   KITE_SYNC_USER_ID: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().uuid().optional()),
+  GEMINI_API_KEY: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
+  OPENAI_API_KEY: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
 });
 
 export const env = envSchema.parse(process.env);
+

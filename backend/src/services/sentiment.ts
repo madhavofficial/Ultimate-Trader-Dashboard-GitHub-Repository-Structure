@@ -268,3 +268,71 @@ export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
     reasoning: `Extracted ${detectedSymbols.length} ticker(s) with ${eventType} event category. Sentiment scored at ${sentimentScore > 0 ? '+' : ''}${sentimentScore} (confidence: ${Math.round(confidence * 100)}%). ${rippleImpacts.length > 0 ? `Identified ${rippleImpacts.length} second-order market transmission ripple(s).` : 'Direct corporate price action transmission.'}`,
   };
 }
+
+export async function analyzeNewsAsync(title: string, summary: string): Promise<EnrichedEvent> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const prompt = `Analyze this Indian financial news headline and summary for stock market impact.
+Headline: ${title}
+Summary: ${summary}
+
+Return ONLY valid JSON matching this schema:
+{
+  "eventType": "EARNINGS" | "GOVT_POLICY" | "COMMODITY" | "GEOPOLITICAL" | "MANAGEMENT" | "REGULATORY" | "MACRO",
+  "primarySymbols": string[], // NSE stock symbols like INFY, RELIANCE, TCS, etc.
+  "sentimentScore": number, // float from -1.0 (very bearish) to 1.0 (very bullish)
+  "confidence": number, // float from 0.0 to 1.0
+  "impactHorizon": "INTRADAY" | "SHORT_TERM" | "MEDIUM_TERM",
+  "transmissionPath": "DIRECT" | "SUPPLY_CHAIN" | "COMMODITY_INPUT" | "SECTOR_PEER" | "MACRO_FX",
+  "rippleImpacts": [
+    {
+      "symbol": string,
+      "sector": string,
+      "impactDirection": "POSITIVE" | "NEGATIVE",
+      "strength": number,
+      "rationale": string
+    }
+  ],
+  "reasoning": string
+}`;
+
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { response_mime_type: "application/json" },
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJson) {
+          const parsed = JSON.parse(rawJson);
+          return {
+            title,
+            source: "LLM_GEMINI",
+            summary: summary.slice(0, 300),
+            eventType: parsed.eventType ?? "MACRO",
+            primarySymbols: Array.isArray(parsed.primarySymbols) && parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
+            sentimentScore: Number(parsed.sentimentScore ?? 0),
+            confidence: Number(parsed.confidence ?? 0.8),
+            impactHorizon: parsed.impactHorizon ?? "SHORT_TERM",
+            transmissionPath: parsed.transmissionPath ?? "DIRECT",
+            rippleImpacts: Array.isArray(parsed.rippleImpacts) ? parsed.rippleImpacts : [],
+            reasoning: parsed.reasoning ?? "Classified by Gemini Flash financial intelligence.",
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("LLM sentiment enrichment failed, falling back to deterministic NLP:", err);
+    }
+  }
+
+  // Fallback to fast deterministic NLP
+  return analyzeNewsText(title, summary);
+}
+

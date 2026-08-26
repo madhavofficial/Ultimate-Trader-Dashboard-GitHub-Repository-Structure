@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { Server } from "socket.io";
+import { XMLParser } from "fast-xml-parser";
 import { prisma } from "../db/client";
-import { analyzeNewsText, EnrichedEvent } from "../services/sentiment";
+import { analyzeNewsAsync, EnrichedEvent } from "../services/sentiment";
 
 export interface RawNewsArticle {
   id: string;
@@ -12,7 +13,57 @@ export interface RawNewsArticle {
   publishedAt: Date;
 }
 
-// Curated live mock / real-world feed source items for Indian equity markets
+const RSS_FEEDS = [
+  { source: "ECONOMIC_TIMES", url: "https://economictimes.indiatimes.com/markets/rssfeeds/2146842.cms" },
+  { source: "MONEYCONTROL", url: "https://www.moneycontrol.com/rss/MCtopnews.xml" },
+];
+
+export async function fetchLiveRssFeeds(): Promise<RawNewsArticle[]> {
+  const articles: RawNewsArticle[] = [];
+  const parser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true });
+
+  for (const feed of RSS_FEEDS) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000); // 4s timeout
+      const res = await fetch(feed.url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) UltimateTrader/1.0" },
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = parser.parse(text);
+        const items = parsed?.rss?.channel?.item ?? [];
+        const rawList = Array.isArray(items) ? items : [items];
+
+        for (const item of rawList.slice(0, 8)) {
+          if (!item.title) continue;
+          // Strip HTML tags from description
+          const cleanSummary = String(item.description || item.title)
+            .replace(/<[^>]*>?/gm, "")
+            .trim();
+
+          articles.push({
+            id: crypto.createHash("sha256").update(`${feed.source}:${item.title}`).digest("hex").slice(0, 32),
+            source: feed.source,
+            title: String(item.title).trim(),
+            summary: cleanSummary.slice(0, 400),
+            url: item.link ? String(item.link) : undefined,
+            publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
+          });
+        }
+      }
+    } catch {
+      // Ignore network failures for specific RSS feeds, will fallback
+    }
+  }
+
+  return articles;
+}
+
+// Curated live fallback feed source items for Indian equity markets
 const SAMPLE_MARKET_FEED: Array<Omit<RawNewsArticle, "id" | "publishedAt">> = [
   {
     source: "ECONOMIC_TIMES",
@@ -52,6 +103,7 @@ const SAMPLE_MARKET_FEED: Array<Omit<RawNewsArticle, "id" | "publishedAt">> = [
   },
 ];
 
+
 export async function processNewsArticle(io: Server | null, article: RawNewsArticle) {
   const externalId = article.id || crypto.createHash("sha256").update(`${article.source}:${article.title}`).digest("hex").slice(0, 32);
 
@@ -60,8 +112,8 @@ export async function processNewsArticle(io: Server | null, article: RawNewsArti
   });
   if (existing) return null;
 
-  // Run AI Enrichment
-  const enriched: EnrichedEvent = analyzeNewsText(article.title, article.summary);
+  // Run AI Enrichment (LLM if available, with deterministic fallback)
+  const enriched: EnrichedEvent = await analyzeNewsAsync(article.title, article.summary);
 
   const eventRecord = await prisma.event.create({
     data: {
@@ -106,23 +158,26 @@ export async function processNewsArticle(io: Server | null, article: RawNewsArti
 export async function syncNewsFeed(io: Server | null) {
   let ingestedCount = 0;
 
-  for (const item of SAMPLE_MARKET_FEED) {
-    const id = crypto.createHash("sha256").update(`${item.source}:${item.title}`).digest("hex").slice(0, 32);
-    const publishedAt = new Date(Date.now() - Math.floor(Math.random() * 3600000));
+  // 1. Try Live RSS Feeds first
+  const liveArticles = await fetchLiveRssFeeds();
+  const articlesToProcess = liveArticles.length > 0
+    ? liveArticles
+    : SAMPLE_MARKET_FEED.map((item) => ({
+        ...item,
+        id: crypto.createHash("sha256").update(`${item.source}:${item.title}`).digest("hex").slice(0, 32),
+        publishedAt: new Date(),
+      }));
 
-    const result = await processNewsArticle(io, {
-      id,
-      source: item.source,
-      title: item.title,
-      summary: item.summary,
-      url: item.url,
-      publishedAt,
-    });
-
-    if (result) ingestedCount++;
+  for (const article of articlesToProcess) {
+    try {
+      const created = await processNewsArticle(io, article);
+      if (created) ingestedCount++;
+    } catch (error) {
+      console.error(`Failed to ingest article "${article.title}":`, error);
+    }
   }
 
-  return { ingestedCount };
+  return { ingestedCount, totalProcessed: articlesToProcess.length };
 }
 
 let schedulerTimer: NodeJS.Timeout | null = null;

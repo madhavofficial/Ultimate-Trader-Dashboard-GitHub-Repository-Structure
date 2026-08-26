@@ -54,23 +54,25 @@ router.post("/watchlist", async (req: AuthRequest, res, next) => {
 });
 
 import { getCurrentMarketStatus } from "../services/marketHoursService";
-import { generateHistoricalCandles } from "../services/historicalDataService";
+import { fetchKiteHistoricalCandles, generateHistoricalCandles } from "../services/historicalDataService";
 
 router.get("/status", (_req, res) => {
   return res.json({ ok: true, marketStatus: getCurrentMarketStatus() });
 });
 
-router.get("/candles", (req, res, next) => {
+router.get("/candles", async (req: AuthRequest, res, next) => {
   try {
     const symbol = z.string().trim().min(1).parse(req.query.symbol).toUpperCase();
     const count = z.coerce.number().min(10).max(300).default(60).parse(req.query.count);
-    const interval = z.coerce.number().min(1).max(60).default(5).parse(req.query.interval);
-    const candles = generateHistoricalCandles(symbol, 1500, count, interval);
+    const intervalParam = z.enum(["minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"]).default("5minute").parse(req.query.interval);
+    const candles = await fetchKiteHistoricalCandles(req.user!.id, symbol, intervalParam, count);
     return res.json({ ok: true, symbol, candles });
   } catch (error) {
     return next(error);
   }
 });
 
+
 export default router;
+
 

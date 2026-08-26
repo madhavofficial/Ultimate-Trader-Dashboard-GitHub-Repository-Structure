@@ -150,49 +150,37 @@ export async function placeKiteLiveOrder(
     tag?: string;
   }
 ) {
+  const client = await getKiteClient(userId);
   const exchange = params.exchange ?? "NSE";
   const instrumentKey = `${exchange}:${params.symbol}`;
 
   // 1. Resolve realistic order price for risk evaluation
-  // For MARKET and SL-M orders, ALWAYS ignore caller-supplied price and fetch fresh live market quote
   let estimatedPrice: number | undefined;
+
   if (params.order_type === "LIMIT" || params.order_type === "SL") {
     estimatedPrice = params.price;
-  }
-
-  if (!estimatedPrice || estimatedPrice <= 0 || params.order_type === "MARKET" || params.order_type === "SL-M") {
-    // 1a. Attempt immediate fresh live quote from Kite Connect if session exists
+  } else {
+    // For MARKET and SL-M orders, STRICTLY require fresh live quote from Kite Connect.
+    // Stale cached prices are rejected to protect capital against sudden market swings.
     try {
-      const client = await getKiteClient(userId);
       const ltpResponse = await client.getLTP([instrumentKey]);
       const liveLtp = ltpResponse?.[instrumentKey]?.last_price;
       if (liveLtp && liveLtp > 0) {
         estimatedPrice = Number(liveLtp);
       }
-    } catch {
-      // Fall through to database instrument / holding cache
-    }
-
-    // 1b. Fallback to stored database instrument / holding price if broker quote API fails
-    if (!estimatedPrice || estimatedPrice <= 0) {
-      try {
-        const [inst, holding] = await Promise.all([
-          prisma.instrument.findFirst({
-            where: { tradingsymbol: params.symbol, exchange: exchange as any },
-          }),
-          prisma.holding.findFirst({
-            where: { userId, symbol: params.symbol },
-          }),
-        ]);
-        estimatedPrice = inst?.lastPrice ? Number(inst.lastPrice) : holding?.avg ? Number(holding.avg) : undefined;
-      } catch {
-        // Fall through to error check
-      }
+    } catch (error) {
+      throw new AppError(
+        503,
+        `Live market quote for ${params.symbol} could not be retrieved from broker (${error instanceof Error ? error.message : "Quote service unavailable"}). For safety, real-money MARKET orders are blocked. Please use a LIMIT order.`
+      );
     }
   }
 
   if (!estimatedPrice || estimatedPrice <= 0) {
-    throw new AppError(400, `Cannot evaluate pre-trade risk for MARKET order on ${params.symbol}: no live reference price available. Please specify a LIMIT price.`);
+    throw new AppError(
+      400,
+      `Cannot evaluate pre-trade risk for MARKET order on ${params.symbol}: no live quote available. Please specify a LIMIT order price.`
+    );
   }
 
   // 2. Mandatory Pre-Trade Risk Check
@@ -204,8 +192,8 @@ export async function placeKiteLiveOrder(
     side: params.transaction_type,
   });
 
-  const client = await getKiteClient(userId);
   const variety = "regular";
+
 
 
 

@@ -13,6 +13,9 @@ import alertRoutes from "./routes/alerts";
 import kiteRoutes from "./routes/kite";
 import marketRoutes from "./routes/market";
 import intelligenceRoutes from "./routes/intelligence";
+import riskRoutes from "./routes/risk";
+import signalsRoutes from "./routes/signals";
+import analyticsRoutes from "./routes/analytics";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { prisma } from "./db/client";
 import jwt from "jsonwebtoken";
@@ -60,8 +63,12 @@ app.use("/alerts", alertRoutes);
 app.use("/broker/kite", kiteRoutes);
 app.use("/market", marketRoutes);
 app.use("/intelligence", intelligenceRoutes);
+app.use("/risk", riskRoutes);
+app.use("/signals", signalsRoutes);
+app.use("/analytics", analyticsRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
+
 
 export function createHttpServer() {
   const server = http.createServer(app);

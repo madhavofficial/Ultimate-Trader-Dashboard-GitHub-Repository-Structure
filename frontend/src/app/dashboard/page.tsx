@@ -43,12 +43,65 @@ type MarketEvent = {
   occurredAt: string;
 };
 
+type Signal = {
+  id: string;
+  symbol: string;
+  direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+  compositeScore: number;
+  technicalScore: number;
+  sentimentScore: number;
+  macroScore: number;
+  confidence: number;
+  horizon: string;
+  rationale: string;
+  status: string;
+  createdAt: string;
+};
+
+type Analytics = {
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRatePct: number;
+  grossRealizedPnl: number;
+  estimatedStatutoryCharges: number;
+  netRealizedPnl: number;
+  profitFactor: number;
+  maxDrawdownPct: number;
+  sharpeRatio: number;
+  sectorBreakdown: Array<{ sector: string; tradeCount: number; pnl: number }>;
+};
+
+type RiskSettings = {
+  maxDailyLoss: number;
+  maxPositionSize: number;
+  maxSectorExposurePct: number;
+  killSwitchActive: boolean;
+  stopLossDefaultPct: number;
+  takeProfitDefaultPct: number;
+};
+
+type MarketStatus = {
+  session: string;
+  isOpen: boolean;
+  istTime: string;
+  message: string;
+};
+
+type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
 type AlertItem = {
   id: string;
   symbol: string;
   condition: "GT" | "GTE" | "LT" | "LTE";
   value: number;
-  createdAt: string;
 };
 
 type TriggeredToast = {
@@ -66,9 +119,17 @@ export default function DashboardPage() {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [activeTab, setActiveTab] = useState<"EXECUTION" | "INTELLIGENCE" | "SIGNALS" | "ANALYTICS" | "RISK">("EXECUTION");
+
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [events, setEvents] = useState<MarketEvent[]>([]);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
+  const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState("INFY");
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [toasts, setToasts] = useState<TriggeredToast[]>([]);
 
@@ -79,7 +140,7 @@ export default function DashboardPage() {
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [tradeMessage, setTradeMessage] = useState("");
 
-  // Alert form state
+  // Alert state
   const [alertSymbol, setAlertSymbol] = useState("INFY");
   const [alertCondition, setAlertCondition] = useState<"GT" | "LT">("GT");
   const [alertValue, setAlertValue] = useState("1550");
@@ -113,6 +174,10 @@ export default function DashboardPage() {
       setEvents((prev) => [newEvent, ...prev.slice(0, 19)]);
     };
 
+    const onSignalCreated = (newSignal: Signal) => {
+      setSignals((prev) => [newSignal, ...prev.slice(0, 19)]);
+    };
+
     const onAlertTriggered = (alertData: { alertId: string; symbol: string; message: string }) => {
       const toastId = `${alertData.alertId}-${Date.now()}`;
       setToasts((prev) => [...prev, { id: toastId, symbol: alertData.symbol, message: alertData.message }]);
@@ -125,6 +190,7 @@ export default function DashboardPage() {
     socket.on("kite:tick", onTicks);
     socket.on("portfolio:update", setPortfolio);
     socket.on("market:event", onMarketEvent);
+    socket.on("signal:created", onSignalCreated);
     socket.on("alert:triggered", onAlertTriggered);
 
     return () => {
@@ -132,6 +198,7 @@ export default function DashboardPage() {
       socket.off("kite:tick", onTicks);
       socket.off("portfolio:update");
       socket.off("market:event");
+      socket.off("signal:created");
       socket.off("alert:triggered");
       socket.disconnect();
     };
@@ -139,10 +206,25 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!token) return;
-    void loadPortfolio(token);
-    void loadIntelligence(token);
-    void loadAlerts(token);
+    void loadAllData(token);
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    void loadCandles(selectedChartSymbol, token);
+  }, [selectedChartSymbol, token]);
+
+  async function loadAllData(accessToken: string) {
+    await Promise.all([
+      loadPortfolio(accessToken),
+      loadIntelligence(accessToken),
+      loadSignals(accessToken),
+      loadAnalytics(accessToken),
+      loadRiskSettings(accessToken),
+      loadMarketStatus(accessToken),
+      loadAlerts(accessToken),
+    ]);
+  }
 
   async function authenticate(path: "login" | "register") {
     try {
@@ -162,33 +244,45 @@ export default function DashboardPage() {
   }
 
   async function loadPortfolio(accessToken: string) {
-    const res = await fetch(`${API_URL}/portfolio`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setPortfolio(data.portfolio);
-    }
+    const res = await fetch(`${API_URL}/portfolio`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setPortfolio((await res.json()).portfolio);
   }
 
   async function loadIntelligence(accessToken: string) {
-    const res = await fetch(`${API_URL}/intelligence/events`, {
+    const res = await fetch(`${API_URL}/intelligence/events`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setEvents((await res.json()).events ?? []);
+  }
+
+  async function loadSignals(accessToken: string) {
+    const res = await fetch(`${API_URL}/signals`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setSignals((await res.json()).signals ?? []);
+  }
+
+  async function loadAnalytics(accessToken: string) {
+    const res = await fetch(`${API_URL}/analytics/summary`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setAnalytics((await res.json()).analytics);
+  }
+
+  async function loadRiskSettings(accessToken: string) {
+    const res = await fetch(`${API_URL}/risk/settings`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setRiskSettings((await res.json()).settings);
+  }
+
+  async function loadMarketStatus(accessToken: string) {
+    const res = await fetch(`${API_URL}/market/status`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setMarketStatus((await res.json()).marketStatus);
+  }
+
+  async function loadCandles(chartSym: string, accessToken: string) {
+    const res = await fetch(`${API_URL}/market/candles?symbol=${chartSym}&count=50&interval=5`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (res.ok) {
-      const data = await res.json();
-      setEvents(data.events ?? []);
-    }
+    if (res.ok) setCandles((await res.json()).candles ?? []);
   }
 
   async function loadAlerts(accessToken: string) {
-    const res = await fetch(`${API_URL}/alerts`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setAlerts(data.alerts ?? []);
-    }
+    const res = await fetch(`${API_URL}/alerts`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setAlerts((await res.json()).alerts ?? []);
   }
 
   async function submitPaperTrade(e: FormEvent) {
@@ -202,9 +296,25 @@ export default function DashboardPage() {
     const body = await res.json();
     if (res.ok) {
       setTradeMessage(`✅ ${side} paper trade executed: ${qty} ${symbol} @ ₹${price}`);
-      if (token) void loadPortfolio(token);
+      if (token) {
+        void loadPortfolio(token);
+        void loadAnalytics(token);
+      }
     } else {
       setTradeMessage(`❌ ${body.error ?? "Trade rejected"}`);
+    }
+  }
+
+  async function toggleKillSwitch(active: boolean) {
+    if (!token) return;
+    const res = await fetch(`${API_URL}/risk/kill-switch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ active, reason: active ? "User clicked emergency kill switch" : "User deactivated kill switch" }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setRiskSettings(data.settings);
     }
   }
 
@@ -226,13 +336,12 @@ export default function DashboardPage() {
   }
 
   async function deleteAlert(alertId: string) {
+    if (!token) return;
     const res = await fetch(`${API_URL}/alerts/${alertId}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok && token) {
-      void loadAlerts(token);
-    }
+    if (res.ok) void loadAlerts(token);
   }
 
   async function triggerNewsSync() {
@@ -244,12 +353,23 @@ export default function DashboardPage() {
     void loadIntelligence(token);
   }
 
+  async function generateSignalForSymbol(sym: string) {
+    if (!token) return;
+    const currentPrice = prices[sym] ?? 1500;
+    await fetch(`${API_URL}/signals/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ symbol: sym, price: currentPrice }),
+    });
+    void loadSignals(token);
+  }
+
   if (!token) {
     return (
       <main className="shell">
         <section className="panel" style={{ maxWidth: 420, margin: "15vh auto" }}>
           <h1>Ultimate Trader</h1>
-          <p className="muted">Market Intelligence &amp; Paper Trading Cockpit</p>
+          <p className="muted">Indian Markets Intelligence &amp; Quantitative Cockpit</p>
           <form className="stack" onSubmit={(e) => { e.preventDefault(); void authenticate("login"); }}>
             <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
             <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -266,23 +386,40 @@ export default function DashboardPage() {
 
   return (
     <main className="shell">
-      {/* Real-time Alert Toast Container */}
+      {/* Toast Alert Popups */}
       <div className="toast-container">
-        {toasts.map((toast) => (
-          <div className="toast" key={toast.id}>
+        {toasts.map((t) => (
+          <div className="toast" key={t.id}>
             <strong>🔔 Price Alert Triggered</strong>
-            <p style={{ margin: "4px 0 0", color: "#eef3ff" }}>{toast.message}</p>
+            <p style={{ margin: "4px 0 0", color: "#eef3ff" }}>{t.message}</p>
           </div>
         ))}
       </div>
 
+      {/* Header with Market Session & Kill Switch */}
       <header className="header">
         <div>
-          <h1>Market Intelligence Cockpit</h1>
-          <span className="muted">Live Tick Streamer · Decision Support &amp; Exposure Radar</span>
+          <div className="row" style={{ gap: 12 }}>
+            <h1>Market Intelligence Cockpit</h1>
+            <span className={`badge ${marketStatus?.isOpen ? "badge-positive" : "badge-neutral"}`}>
+              ● {marketStatus?.session ?? "SESSION"} ({marketStatus?.istTime ?? "IST"})
+            </span>
+            {riskSettings?.killSwitchActive && (
+              <span className="badge badge-negative" style={{ animation: "pulse 1s infinite" }}>
+                ⚠️ KILL SWITCH ACTIVE
+              </span>
+            )}
+          </div>
+          <span className="muted">{marketStatus?.message ?? "Continuous live tick streaming & multi-factor alpha"}</span>
         </div>
         <div className="row">
           <button className="secondary" onClick={triggerNewsSync}>🔄 Sync News</button>
+          <button
+            className={riskSettings?.killSwitchActive ? "primary" : "danger"}
+            onClick={() => toggleKillSwitch(!riskSettings?.killSwitchActive)}
+          >
+            {riskSettings?.killSwitchActive ? "🛡️ Deactivate Kill Switch" : "🛑 Emergency Kill Switch"}
+          </button>
           <button className="secondary" onClick={() => { localStorage.removeItem("accessToken"); setToken(null); }}>Log out</button>
         </div>
       </header>
@@ -291,233 +428,433 @@ export default function DashboardPage() {
       <section className="ticker">
         {watchlist.map((item) => {
           const currentPrice = prices[item] ?? portfolio?.holdings.find((h) => h.symbol === item)?.lastPrice ?? 0;
+          const isSelected = selectedChartSymbol === item;
           return (
-            <div className="panel ticker-card" key={item}>
+            <div
+              className="panel ticker-card"
+              key={item}
+              style={{ cursor: "pointer", borderColor: isSelected ? "var(--blue)" : "var(--line)" }}
+              onClick={() => {
+                setSelectedChartSymbol(item);
+                setSymbol(item);
+                setAlertSymbol(item);
+              }}
+            >
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <span className="muted">NSE · {item}</span>
                 <span className="badge badge-blue">LTP</span>
               </div>
               <div className="metric">₹{currentPrice > 0 ? currentPrice.toFixed(2) : "—"}</div>
+              <span className="muted" style={{ fontSize: 10 }}>Click to chart &amp; trade</span>
             </div>
           );
         })}
       </section>
 
-      <div className="grid">
-        {/* Holdings & Real-time PnL */}
-        <section className="panel wide">
-          <h2>
-            Holdings &amp; Real-Time Valuation
-            <span className="muted" style={{ fontSize: 12 }}>Paper Account</span>
-          </h2>
-          <div className="row" style={{ gap: 24, marginBottom: 14 }}>
-            <div>
-              <span className="muted">Available Cash</span>
-              <div className="metric">₹{(portfolio?.cashBalance ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-            </div>
-            <div>
-              <span className="muted">Portfolio Value</span>
-              <div className="metric">₹{(portfolio?.totalCurrentValue ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-            </div>
-            <div>
-              <span className="muted">Unrealized P&amp;L</span>
-              <div className={`metric ${(portfolio?.totalUnrealizedPnl ?? 0) >= 0 ? "positive" : "negative"}`}>
-                {(portfolio?.totalUnrealizedPnl ?? 0) >= 0 ? "+" : ""}₹{(portfolio?.totalUnrealizedPnl ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-              </div>
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Avg Buy</th>
-                <th>Live LTP</th>
-                <th>Invested</th>
-                <th>Current</th>
-                <th>P&amp;L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolio?.holdings.map((h) => (
-                <tr key={h.symbol}>
-                  <td><strong>{h.symbol}</strong></td>
-                  <td>{h.quantity}</td>
-                  <td>₹{h.averagePrice.toFixed(2)}</td>
-                  <td>₹{h.lastPrice.toFixed(2)}</td>
-                  <td>₹{h.investedValue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                  <td>₹{h.currentValue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                  <td className={h.unrealizedPnl >= 0 ? "positive" : "negative"}>
-                    {h.unrealizedPnl >= 0 ? "+" : ""}₹{h.unrealizedPnl.toFixed(2)}
-                  </td>
-                </tr>
-              ))}
-              {(!portfolio?.holdings || portfolio.holdings.length === 0) && (
-                <tr>
-                  <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>No open holdings. Place a paper trade below.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </section>
-
-        {/* Paper Trade Placement Drawer */}
-        <section className="panel side">
-          <h2>Paper Order Execution</h2>
-          <form className="stack" onSubmit={submitPaperTrade}>
-            <div className="row">
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                placeholder="Symbol (e.g. INFY)"
-              />
-              <select value={side} onChange={(e) => setSide(e.target.value as "BUY" | "SELL")}>
-                <option value="BUY">BUY</option>
-                <option value="SELL">SELL</option>
-              </select>
-            </div>
-            <div className="row">
-              <input
-                type="number"
-                min="1"
-                value={qty}
-                onChange={(e) => setQty(e.target.value)}
-                placeholder="Quantity"
-              />
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="Price"
-              />
-            </div>
-            <button className="primary" type="submit">
-              Place {side} Order (₹{(Number(qty || 0) * Number(price || 0)).toLocaleString("en-IN")})
-            </button>
-          </form>
-          {tradeMessage && <p className="muted" style={{ marginTop: 10 }}>{tradeMessage}</p>}
-
-          <hr style={{ borderColor: "var(--line)", margin: "18px 0" }} />
-
-          {/* Quick Price Alert Trigger Setup */}
-          <h2>Set Price Alert</h2>
-          <form className="stack" onSubmit={createPriceAlert}>
-            <div className="row">
-              <input
-                value={alertSymbol}
-                onChange={(e) => setAlertSymbol(e.target.value.toUpperCase())}
-                placeholder="Symbol"
-              />
-              <select value={alertCondition} onChange={(e) => setAlertCondition(e.target.value as "GT" | "LT")}>
-                <option value="GT">&gt; Above</option>
-                <option value="LT">&lt; Below</option>
-              </select>
-              <input
-                type="number"
-                step="0.1"
-                value={alertValue}
-                onChange={(e) => setAlertValue(e.target.value)}
-                placeholder="Target"
-              />
-            </div>
-            <button className="secondary" type="submit">Add Alert</button>
-          </form>
-          {alertMessage && <p className="muted" style={{ marginTop: 8 }}>{alertMessage}</p>}
-
-          {alerts.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <span className="muted" style={{ fontSize: 11, textTransform: "uppercase" }}>Active Alerts ({alerts.length})</span>
-              <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
-                {alerts.map((a) => (
-                  <div className="row" key={a.id} style={{ justifyContent: "space-between", background: "#0c1222", padding: "6px 10px", borderRadius: 6 }}>
-                    <span style={{ fontSize: 12 }}>{a.symbol} {a.condition} ₹{a.value}</span>
-                    <button className="danger" onClick={() => deleteAlert(a.id)}>✕</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* Market Intelligence & Macro Ripple Radar */}
-        <section className="panel half">
-          <h2>
-            Market Intelligence &amp; Event Feed
-            <span className="badge badge-purple">AI Enriched</span>
-          </h2>
-          <div style={{ maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
-            {events.map((ev) => (
-              <div className="event-card" key={ev.id}>
-                <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
-                  <div className="row">
-                    <span className="badge badge-blue">{ev.eventType}</span>
-                    <span className={`badge ${ev.sentimentScore > 0 ? "badge-positive" : ev.sentimentScore < 0 ? "badge-negative" : "badge-neutral"}`}>
-                      {ev.sentimentScore > 0 ? "Bullish" : ev.sentimentScore < 0 ? "Bearish" : "Neutral"} ({ev.sentimentScore > 0 ? "+" : ""}{ev.sentimentScore})
-                    </span>
-                  </div>
-                  <span className="muted" style={{ fontSize: 11 }}>{ev.source.replace("_", " ")}</span>
-                </div>
-                <h3 className="event-title">{ev.title}</h3>
-                <p className="event-summary">{ev.summary}</p>
-
-                {/* Primary & Ripple Ticker Tags */}
-                <div className="row" style={{ flexWrap: "wrap" }}>
-                  {ev.primarySymbols.map((s) => (
-                    <span className="ripple-chip" key={s}>
-                      🎯 <strong>{s}</strong> Direct
-                    </span>
-                  ))}
-                  {ev.rippleImpacts?.map((r) => (
-                    <span className="ripple-chip" key={`${ev.id}-${r.symbol}`}>
-                      ⚡ <strong>{r.symbol}</strong> ({r.impactDirection === "POSITIVE" ? "▲" : "▼"} {r.sector})
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {events.length === 0 && (
-              <p className="muted" style={{ textAlign: "center", padding: 32 }}>No events ingested yet. Click &quot;Sync News&quot; above.</p>
-            )}
-          </div>
-        </section>
-
-        {/* Live Tick Stream & Transmission Channel Overview */}
-        <section className="panel half">
-          <h2>
-            Live Price Action &amp; Exposure Transmission
-            <span className="badge badge-blue">Tick Stream</span>
-          </h2>
-          <div className="chart">
-            {Object.values(prices).slice(-32).map((val, idx) => (
-              <div
-                className="bar"
-                style={{ height: `${Math.max(12, Math.min(100, (val % 100) * 1.5))}%` }}
-                key={`${val}-${idx}`}
-              />
-            ))}
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            <h3 style={{ fontSize: 13, margin: "0 0 8px", color: "var(--muted)", textTransform: "uppercase" }}>
-              Transmission Channels &amp; Exposure Rules
-            </h3>
-            <div style={{ display: "grid", gap: 8, fontSize: 12 }}>
-              <div style={{ background: "#0c1222", padding: "8px 12px", borderRadius: 6, border: "1px solid var(--line)" }}>
-                <strong>🛢️ Crude Oil Benchmark:</strong> Surge $\rightarrow$ <span className="positive">RELIANCE (+)</span> Upstream, <span className="negative">ASIANPAINT (-)</span> Raw materials, <span className="negative">INDIGO (-)</span> Aviation Fuel.
-              </div>
-              <div style={{ background: "#0c1222", padding: "8px 12px", borderRadius: 6, border: "1px solid var(--line)" }}>
-                <strong>💻 US Enterprise IT Spend:</strong> Growth $\rightarrow$ <span className="positive">TCS (+)</span>, <span className="positive">INFY (+)</span> deal momentum &amp; margin expansion.
-              </div>
-              <div style={{ background: "#0c1222", padding: "8px 12px", borderRadius: 6, border: "1px solid var(--line)" }}>
-                <strong>🏦 RBI Monetary Policy:</strong> Rate cuts $\rightarrow$ <span className="positive">HDFCBANK (+)</span>, <span className="positive">SBIN (+)</span> credit expansion &amp; lower cost of funds.
-              </div>
-            </div>
-          </div>
-        </section>
+      {/* Navigation Tabs */}
+      <div className="row" style={{ marginBottom: 16, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
+        <button className={activeTab === "EXECUTION" ? "primary" : "secondary"} onClick={() => setActiveTab("EXECUTION")}>
+          📊 Execution &amp; Holdings
+        </button>
+        <button className={activeTab === "INTELLIGENCE" ? "primary" : "secondary"} onClick={() => setActiveTab("INTELLIGENCE")}>
+          🌐 Market Intelligence ({events.length})
+        </button>
+        <button className={activeTab === "SIGNALS" ? "primary" : "secondary"} onClick={() => setActiveTab("SIGNALS")}>
+          ⚡ Multi-Factor Signals ({signals.length})
+        </button>
+        <button className={activeTab === "ANALYTICS" ? "primary" : "secondary"} onClick={() => setActiveTab("ANALYTICS")}>
+          📈 Quant Performance &amp; Journal
+        </button>
+        <button className={activeTab === "RISK" ? "primary" : "secondary"} onClick={() => setActiveTab("RISK")}>
+          🛡️ Risk Controls
+        </button>
       </div>
+
+      {/* TAB 1: EXECUTION & HOLDINGS */}
+      {activeTab === "EXECUTION" && (
+        <div className="grid">
+          {/* Holdings & Real-time PnL */}
+          <section className="panel wide">
+            <h2>
+              Holdings &amp; Real-Time Valuation
+              <span className="badge badge-blue">Paper Ledger</span>
+            </h2>
+            <div className="row" style={{ gap: 24, marginBottom: 14 }}>
+              <div>
+                <span className="muted">Available Cash</span>
+                <div className="metric">₹{(portfolio?.cashBalance ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
+              </div>
+              <div>
+                <span className="muted">Portfolio Value</span>
+                <div className="metric">₹{(portfolio?.totalCurrentValue ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
+              </div>
+              <div>
+                <span className="muted">Unrealized P&amp;L</span>
+                <div className={`metric ${(portfolio?.totalUnrealizedPnl ?? 0) >= 0 ? "positive" : "negative"}`}>
+                  {(portfolio?.totalUnrealizedPnl ?? 0) >= 0 ? "+" : ""}₹{(portfolio?.totalUnrealizedPnl ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg Buy</th>
+                  <th>Live LTP</th>
+                  <th>Invested</th>
+                  <th>Current</th>
+                  <th>P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio?.holdings.map((h) => (
+                  <tr key={h.symbol}>
+                    <td><strong>{h.symbol}</strong></td>
+                    <td>{h.quantity}</td>
+                    <td>₹{h.averagePrice.toFixed(2)}</td>
+                    <td>₹{h.lastPrice.toFixed(2)}</td>
+                    <td>₹{h.investedValue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+                    <td>₹{h.currentValue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+                    <td className={h.unrealizedPnl >= 0 ? "positive" : "negative"}>
+                      {h.unrealizedPnl >= 0 ? "+" : ""}₹{h.unrealizedPnl.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+                {(!portfolio?.holdings || portfolio.holdings.length === 0) && (
+                  <tr>
+                    <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>No open holdings. Place a paper trade below.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          {/* Paper Trade Placement Drawer */}
+          <section className="panel side">
+            <h2>Paper Order Execution</h2>
+            <form className="stack" onSubmit={submitPaperTrade}>
+              <div className="row">
+                <input
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                  placeholder="Symbol (e.g. INFY)"
+                />
+                <select value={side} onChange={(e) => setSide(e.target.value as "BUY" | "SELL")}>
+                  <option value="BUY">BUY</option>
+                  <option value="SELL">SELL</option>
+                </select>
+              </div>
+              <div className="row">
+                <input
+                  type="number"
+                  min="1"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  placeholder="Quantity"
+                />
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="Price"
+                />
+              </div>
+              <div className="muted" style={{ fontSize: 11 }}>
+                Estimated Order Value: ₹{(Number(qty || 0) * Number(price || 0)).toLocaleString("en-IN")} · Est. Statutory Tax (STT/GST): ₹{((Number(qty || 0) * Number(price || 0)) * 0.0012).toFixed(2)}
+              </div>
+              <button className="primary" type="submit" disabled={riskSettings?.killSwitchActive}>
+                {riskSettings?.killSwitchActive ? "Blocked by Kill Switch" : `Place ${side} Order`}
+              </button>
+            </form>
+            {tradeMessage && <p className="muted" style={{ marginTop: 10 }}>{tradeMessage}</p>}
+
+            <hr style={{ borderColor: "var(--line)", margin: "16px 0" }} />
+
+            {/* Set Price Alert */}
+            <h2>Set Price Alert</h2>
+            <form className="stack" onSubmit={createPriceAlert}>
+              <div className="row">
+                <input
+                  value={alertSymbol}
+                  onChange={(e) => setAlertSymbol(e.target.value.toUpperCase())}
+                  placeholder="Symbol"
+                />
+                <select value={alertCondition} onChange={(e) => setAlertCondition(e.target.value as "GT" | "LT")}>
+                  <option value="GT">&gt; Above</option>
+                  <option value="LT">&lt; Below</option>
+                </select>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={alertValue}
+                  onChange={(e) => setAlertValue(e.target.value)}
+                  placeholder="Target"
+                />
+              </div>
+              <button className="secondary" type="submit">Add Alert</button>
+            </form>
+            {alertMessage && <p className="muted" style={{ marginTop: 8 }}>{alertMessage}</p>}
+
+            {alerts.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <span className="muted" style={{ fontSize: 11, textTransform: "uppercase" }}>Active Alerts ({alerts.length})</span>
+                <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                  {alerts.map((a) => (
+                    <div className="row" key={a.id} style={{ justifyContent: "space-between", background: "#0c1222", padding: "6px 10px", borderRadius: 6 }}>
+                      <span style={{ fontSize: 12 }}>{a.symbol} {a.condition} ₹{a.value}</span>
+                      <button className="danger" onClick={() => deleteAlert(a.id)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Interactive Candlestick / OHLC Chart Strip */}
+          <section className="panel full">
+            <h2>
+              {selectedChartSymbol} · 5m Candlestick Price Action
+              <span className="badge badge-blue">{candles.length} Candles</span>
+            </h2>
+            <div style={{ display: "flex", alignItems: "end", gap: 4, height: 160, padding: "12px 0", background: "#0a0f1d", borderRadius: 8, paddingLeft: 12, paddingRight: 12 }}>
+              {candles.map((c, idx) => {
+                const isGreen = c.close >= c.open;
+                const minPrice = Math.min(...candles.map((x) => x.low));
+                const maxPrice = Math.max(...candles.map((x) => x.high));
+                const range = maxPrice - minPrice || 1;
+                const heightPct = Math.max(8, ((Math.abs(c.close - c.open)) / range) * 120);
+                return (
+                  <div key={idx} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%", justifyContent: "flex-end" }} title={`Time: ${new Date(c.time * 1000).toLocaleTimeString()} | O: ₹${c.open} H: ₹${c.high} L: ₹${c.low} C: ₹${c.close}`}>
+                    <div style={{ width: 1, height: "100%", background: isGreen ? "var(--green)" : "var(--red)", opacity: 0.3 }} />
+                    <div style={{ width: "100%", height: `${heightPct}%`, background: isGreen ? "var(--green)" : "var(--red)", borderRadius: 2 }} />
+                  </div>
+                );
+              })}
+            </div>
+            <span className="muted">Hover candles to view OHLCV. Switch symbol in watchlist above to re-render charts.</span>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 2: INTELLIGENCE & EXPOSURE RADAR */}
+      {activeTab === "INTELLIGENCE" && (
+        <div className="grid">
+          <section className="panel wide">
+            <h2>
+              Market Intelligence &amp; Event Stream
+              <span className="badge badge-purple">NLP Enriched</span>
+            </h2>
+            <div style={{ display: "grid", gap: 12 }}>
+              {events.map((ev) => (
+                <div className="event-card" key={ev.id}>
+                  <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+                    <div className="row">
+                      <span className="badge badge-blue">{ev.eventType}</span>
+                      <span className={`badge ${ev.sentimentScore > 0 ? "badge-positive" : ev.sentimentScore < 0 ? "badge-negative" : "badge-neutral"}`}>
+                        {ev.sentimentScore > 0 ? "Bullish" : ev.sentimentScore < 0 ? "Bearish" : "Neutral"} ({ev.sentimentScore > 0 ? "+" : ""}{ev.sentimentScore})
+                      </span>
+                    </div>
+                    <span className="muted" style={{ fontSize: 11 }}>{ev.source.replace("_", " ")}</span>
+                  </div>
+                  <h3 className="event-title">{ev.title}</h3>
+                  <p className="event-summary">{ev.summary}</p>
+                  <div className="row" style={{ flexWrap: "wrap" }}>
+                    {ev.primarySymbols.map((s) => (
+                      <span className="ripple-chip" key={s}>🎯 <strong>{s}</strong> Direct</span>
+                    ))}
+                    {ev.rippleImpacts?.map((r) => (
+                      <span className="ripple-chip" key={`${ev.id}-${r.symbol}`}>
+                        ⚡ <strong>{r.symbol}</strong> ({r.impactDirection === "POSITIVE" ? "▲" : "▼"} {r.sector})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel side">
+            <h2>Transmission Channels</h2>
+            <div style={{ display: "grid", gap: 10, fontSize: 12 }}>
+              <div style={{ background: "#0c1222", padding: "10px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <strong>🛢️ Crude Oil Surge:</strong>
+                <p className="muted" style={{ margin: "4px 0 0" }}>+RELIANCE (Upstream), -ASIANPAINT (Raw materials), -INDIGO (Aviation fuel)</p>
+              </div>
+              <div style={{ background: "#0c1222", padding: "10px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <strong>💻 US Enterprise IT Budgets:</strong>
+                <p className="muted" style={{ margin: "4px 0 0" }}>+TCS, +INFY deal pipeline acceleration and cloud enterprise renewals.</p>
+              </div>
+              <div style={{ background: "#0c1222", padding: "10px", borderRadius: 8, border: "1px solid var(--line)" }}>
+                <strong>🏦 RBI Rate Adjustments:</strong>
+                <p className="muted" style={{ margin: "4px 0 0" }}>+HDFCBANK, +SBIN credit expansion &amp; bond treasury gains on yield decline.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 3: MULTI-FACTOR SIGNALS */}
+      {activeTab === "SIGNALS" && (
+        <div className="grid">
+          <section className="panel wide">
+            <h2>
+              Multi-Factor Proposed Signals
+              <button className="secondary" onClick={() => generateSignalForSymbol(selectedChartSymbol)}>⚡ Generate Signal for {selectedChartSymbol}</button>
+            </h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Composite</th>
+                  <th>Tech (40%)</th>
+                  <th>Sent (35%)</th>
+                  <th>Macro (25%)</th>
+                  <th>Horizon</th>
+                  <th>Rationale</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signals.map((s) => (
+                  <tr key={s.id}>
+                    <td><strong>{s.symbol}</strong></td>
+                    <td>
+                      <span className={`badge ${s.direction === "BULLISH" ? "badge-positive" : s.direction === "BEARISH" ? "badge-negative" : "badge-neutral"}`}>
+                        {s.direction}
+                      </span>
+                    </td>
+                    <td><strong>{s.compositeScore > 0 ? "+" : ""}{s.compositeScore}</strong></td>
+                    <td>{s.technicalScore !== null ? (s.technicalScore > 0 ? `+${s.technicalScore}` : s.technicalScore) : "—"}</td>
+                    <td>{s.sentimentScore !== null ? (s.sentimentScore > 0 ? `+${s.sentimentScore}` : s.sentimentScore) : "—"}</td>
+                    <td>{s.macroScore !== null ? (s.macroScore > 0 ? `+${s.macroScore}` : s.macroScore) : "—"}</td>
+                    <td><span className="badge badge-blue">{s.horizon}</span></td>
+                    <td className="muted" style={{ maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={s.rationale}>
+                      {s.rationale}
+                    </td>
+                  </tr>
+                ))}
+                {signals.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="muted" style={{ textAlign: "center", padding: 24 }}>No signals generated yet. Click &quot;Generate Signal&quot; above.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="panel side">
+            <h2>Scoring Methodology</h2>
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
+              Composite score = <strong>0.40 × Technical</strong> (RSI + SMA crossovers) + <strong>0.35 × News Sentiment</strong> + <strong>0.25 × Macro Transmission</strong>.
+            </p>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 4: QUANTITATIVE ANALYTICS & JOURNAL */}
+      {activeTab === "ANALYTICS" && (
+        <div className="grid">
+          <section className="panel full">
+            <h2>Quantitative Portfolio Performance &amp; Attribution</h2>
+            <div className="grid" style={{ gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Total Trades</span>
+                <div className="metric">{analytics?.totalTrades ?? 0}</div>
+              </div>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Win Rate</span>
+                <div className="metric positive">{analytics?.winRatePct ?? 0}%</div>
+              </div>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Profit Factor</span>
+                <div className="metric">{analytics?.profitFactor ?? 0}</div>
+              </div>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Sharpe Ratio</span>
+                <div className="metric">{analytics?.sharpeRatio ?? 0}</div>
+              </div>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Max Drawdown</span>
+                <div className="metric negative">{analytics?.maxDrawdownPct ?? 0}%</div>
+              </div>
+              <div className="panel" style={{ background: "#0c1222" }}>
+                <span className="muted">Net Realized P&amp;L</span>
+                <div className={`metric ${(analytics?.netRealizedPnl ?? 0) >= 0 ? "positive" : "negative"}`}>
+                  ₹{(analytics?.netRealizedPnl ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+
+            <h3 style={{ marginTop: 24, fontSize: 15 }}>Sector Attribution</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Sector</th>
+                  <th>Trade Count</th>
+                  <th>Realized P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analytics?.sectorBreakdown.map((sec) => (
+                  <tr key={sec.sector}>
+                    <td><strong>{sec.sector}</strong></td>
+                    <td>{sec.tradeCount}</td>
+                    <td className={sec.pnl >= 0 ? "positive" : "negative"}>₹{sec.pnl.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </div>
+      )}
+
+      {/* TAB 5: RISK CONTROLS */}
+      {activeTab === "RISK" && (
+        <div className="grid">
+          <section className="panel half">
+            <h2>Pre-Trade Capital Limits</h2>
+            <div className="stack" style={{ gap: 14 }}>
+              <div>
+                <span className="muted">Max Daily Loss Threshold (Auto-Kill Switch Trigger)</span>
+                <div className="metric negative">₹{Number(riskSettings?.maxDailyLoss ?? 50000).toLocaleString("en-IN")}</div>
+              </div>
+              <div>
+                <span className="muted">Max Single Position / Trade Value</span>
+                <div className="metric">₹{Number(riskSettings?.maxPositionSize ?? 200000).toLocaleString("en-IN")}</div>
+              </div>
+              <div>
+                <span className="muted">Max Single Sector Concentration</span>
+                <div className="metric">{riskSettings?.maxSectorExposurePct ?? 35}%</div>
+              </div>
+              <div>
+                <span className="muted">Default Stop-Loss / Take-Profit</span>
+                <div className="metric">{riskSettings?.stopLossDefaultPct ?? 2}% SL / {riskSettings?.takeProfitDefaultPct ?? 4}% TP</div>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel half">
+            <h2>Emergency Controls</h2>
+            <div style={{ background: "#0c1222", padding: 16, borderRadius: 8, border: "1px solid var(--line)" }}>
+              <h3>Trading Kill Switch Status</h3>
+              <p className="muted">
+                When active, all order placement is blocked instantly at the risk engine layer.
+              </p>
+              <button
+                className={riskSettings?.killSwitchActive ? "primary" : "danger"}
+                style={{ marginTop: 12, padding: "12px 20px" }}
+                onClick={() => toggleKillSwitch(!riskSettings?.killSwitchActive)}
+              >
+                {riskSettings?.killSwitchActive ? "🛡️ Kill Switch is ACTIVE (Click to Unlock)" : "🛑 Activate Emergency Kill Switch"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

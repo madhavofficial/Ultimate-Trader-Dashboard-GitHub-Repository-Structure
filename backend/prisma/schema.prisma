@@ -22,7 +22,12 @@ model User {
   portfolioAccount PortfolioAccount?
   ledgerEntries CashLedgerEntry[]
   positions     Position[]
+  riskSettings  RiskSettings?
+  signals       Signal[]
+  tradeJournals TradeJournal[]
+  alertNotifications AlertNotification[]
 }
+
 
 model RefreshToken {
   id        String   @id @default(uuid())
@@ -207,3 +212,75 @@ model Position {
   @@unique([userId, exchange, symbol, product])
   @@index([userId, updatedAt])
 }
+
+model RiskSettings {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  maxDailyLoss         Decimal  @default(50000) @db.Decimal(20, 8) // Max loss in INR before auto-freeze
+  maxPositionSize      Decimal  @default(200000) @db.Decimal(20, 8) // Max single trade value in INR
+  maxSectorExposurePct Float    @default(35.0) // Max % of portfolio in a single sector
+  killSwitchActive     Boolean  @default(false) // Emergency kill switch to block orders
+  stopLossDefaultPct   Float    @default(2.0) // Default SL % for bracket orders
+  takeProfitDefaultPct Float    @default(4.0) // Default TP % for bracket orders
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Signal {
+  id              String   @id @default(uuid())
+  userId          String?
+  symbol          String
+  direction       String   // "BULLISH", "BEARISH", "NEUTRAL"
+  compositeScore  Float    // -1.0 to +1.0
+  technicalScore  Float?   // -1.0 to +1.0
+  sentimentScore  Float?   // -1.0 to +1.0
+  macroScore      Float?   // -1.0 to +1.0
+  confidence      Float    @default(0.7)
+  horizon         String   // "INTRADAY", "SWING", "POSITIONAL"
+  rationale       String
+  keyFactors      Json?
+  status          String   @default("ACTIVE") // "ACTIVE", "EXPIRED", "EXECUTED"
+  createdAt       DateTime @default(now())
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([symbol, createdAt])
+  @@index([status, createdAt])
+}
+
+model TradeJournal {
+  id             String   @id @default(uuid())
+  userId         String
+  tradeId        String?
+  symbol         String
+  side           String
+  qty            Int
+  price          Decimal  @db.Decimal(20, 8)
+  strategyTag    String?  // "MOMENTUM_BREAKOUT", "MEAN_REVERSION", "NEWS_CATALYST"
+  conviction     Int      @default(3) // 1 to 5 stars
+  notes          String?
+  setupSnapshot  Json?    // Technical indicators (RSI, SMA, LTP) at time of trade
+  pnlRealized    Decimal? @db.Decimal(20, 8)
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, symbol])
+  @@index([userId, createdAt])
+}
+
+model AlertNotification {
+  id           String   @id @default(uuid())
+  userId       String
+  alertId      String?
+  symbol       String
+  channel      String   // "IN_APP", "TELEGRAM", "WEBHOOK", "EMAIL"
+  title        String
+  message      String
+  status       String   @default("DELIVERED") // "DELIVERED", "FAILED", "SUPPRESSED_COOLDOWN"
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([symbol, createdAt])
+}
+

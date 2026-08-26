@@ -48,7 +48,7 @@ export function startInstrumentSyncScheduler(userId: string) {
   const workerStop = startJobWorker(`instruments:${userId}`, async (job) => {
     if (job.type !== "SYNC_INSTRUMENTS") return;
     await syncInstruments(userId);
-  }, { pollIntervalMs: 30_000 });
+  }, { pollIntervalMs: 30_000, type: "SYNC_INSTRUMENTS" });
   const timer = setInterval(() => { void enqueueJob("SYNC_INSTRUMENTS", { userId }); }, 24 * 60 * 60 * 1000);
   void enqueueJob("SYNC_INSTRUMENTS", { userId });
   return () => { workerStop(); clearInterval(timer); };
@@ -74,16 +74,21 @@ export async function symbolsForTokens(tokens: number[]) {
 
 function toInstrumentData(row: InstrumentRow): Prisma.InstrumentCreateInput | null {
   if (!row.instrument_token || !row.exchange || !row.tradingsymbol || !row.tick_size || !row.lot_size) return null;
+  const instrumentToken = Number(row.instrument_token);
+  const exchangeToken = row.exchange_token ? Number(row.exchange_token) : undefined;
+  const lotSize = Number(row.lot_size);
+  const tickSize = Number(row.tick_size);
+  if (!Number.isSafeInteger(instrumentToken) || instrumentToken <= 0 || (exchangeToken !== undefined && (!Number.isSafeInteger(exchangeToken) || exchangeToken <= 0)) || !Number.isSafeInteger(lotSize) || lotSize <= 0 || !Number.isFinite(tickSize) || tickSize <= 0) return null;
   return {
-    instrumentToken: Number(row.instrument_token),
-    exchangeToken: row.exchange_token ? Number(row.exchange_token) : undefined,
+    instrumentToken,
+    exchangeToken,
     tradingsymbol: row.tradingsymbol,
     name: row.name || undefined,
     lastPrice: decimalOrNull(row.last_price),
     expiry: row.expiry ? new Date(`${row.expiry}T00:00:00.000Z`) : undefined,
     strike: decimalOrNull(row.strike),
     tickSize: new Prisma.Decimal(row.tick_size),
-    lotSize: Number(row.lot_size),
+    lotSize,
     instrumentType: row.instrument_type,
     segment: row.segment,
     exchange: row.exchange,
@@ -97,6 +102,7 @@ function decimalOrNull(value: string) {
 
 function parseCsv(csv: string): InstrumentRow[] {
   const [headerLine, ...lines] = csv.split(/\r?\n/).filter(Boolean);
+  if (!headerLine) return [];
   const headers = parseCsvLine(headerLine);
   return lines.map(parseCsvLine).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])) as InstrumentRow);
 }

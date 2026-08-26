@@ -83,7 +83,7 @@ export async function syncKiteHoldings(userId: string) {
 export async function syncKiteAccount(userId: string) {
   const client = await getKiteClient(userId);
   const [profile, holdings, positionsResponse] = await Promise.all([client.getProfile(), client.getHoldings(), client.getPositions()]);
-  const positions = positionsResponse.net;
+  const positions = positionsResponse.net ?? [];
   const session = await prisma.brokerSession.findUniqueOrThrow({ where: { userId_provider: { userId, provider: PROVIDER } } });
 
   await prisma.$transaction(async (tx) => {

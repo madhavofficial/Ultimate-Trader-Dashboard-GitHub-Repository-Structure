@@ -115,7 +115,12 @@ router.post("/refresh", async (req, res, next) => {
     }
     if (record.expiresAt <= new Date()) throw new AppError(401, "Invalid refresh token");
 
-    const payload = jwt.verify(rawToken, env.JWT_REFRESH_SECRET) as jwt.JwtPayload;
+    let payload: jwt.JwtPayload;
+    try {
+      payload = jwt.verify(rawToken, env.JWT_REFRESH_SECRET) as jwt.JwtPayload;
+    } catch {
+      throw new AppError(401, "Invalid refresh token");
+    }
     if (payload.sub !== record.userId) throw new AppError(401, "Invalid refresh token");
 
     const newRefreshToken = issueRefreshToken(record.user);

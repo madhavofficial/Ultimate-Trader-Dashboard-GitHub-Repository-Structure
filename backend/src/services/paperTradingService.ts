@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { AppError } from "../errors/appError";
+import { validatePreTradeRisk } from "./riskEngine";
 
 export async function ensurePortfolioAccount(userId: string) {
   return prisma.portfolioAccount.upsert({ where: { userId }, update: {}, create: { userId } });
@@ -8,9 +9,11 @@ export async function ensurePortfolioAccount(userId: string) {
 
 export async function executePaperTrade(input: { userId: string; symbol: string; qty: number; price: number; side: "BUY" | "SELL" }) {
   await ensurePortfolioAccount(input.userId);
+  await validatePreTradeRisk(input);
   const price = new Prisma.Decimal(input.price);
   const quantity = new Prisma.Decimal(input.qty);
   const notional = price.mul(quantity);
+
 
   return prisma.$transaction(async (tx) => {
     const accountRows = await tx.$queryRaw<Array<{ id: string }>>`

@@ -8,6 +8,10 @@ export interface PriceTick {
   last_price: number;
 }
 
+// Fire once per threshold crossing and re-arm after the price returns below
+// or above the threshold. This avoids one notification per market tick.
+const activeAlerts = new Set<string>();
+
 export async function evaluateAlertsOnTicks(io: Server, ticks: PriceTick[]) {
   if (!ticks || ticks.length === 0) return;
 
@@ -47,6 +51,8 @@ export async function evaluateAlertsOnTicks(io: Server, ticks: PriceTick[]) {
     }
 
     if (triggered) {
+      if (activeAlerts.has(alert.id)) continue;
+      activeAlerts.add(alert.id);
       const payload = {
         alertId: alert.id,
         symbol: alert.symbol,
@@ -68,6 +74,8 @@ export async function evaluateAlertsOnTicks(io: Server, ticks: PriceTick[]) {
         entityId: alert.id,
         metadata: payload,
       });
+    } else {
+      activeAlerts.delete(alert.id);
     }
   }
 }

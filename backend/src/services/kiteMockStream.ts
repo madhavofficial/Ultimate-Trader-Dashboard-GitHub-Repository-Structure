@@ -28,8 +28,8 @@ export function startMockKiteStream(io: Server) {
     });
 
     io.emit("tick", ticks);
-    void updateLtpAndBroadcast(io, ticks);
-    void evaluateAlertsOnTicks(io, ticks);
+    void updateLtpAndBroadcast(io, ticks).catch((error) => console.error("Mock portfolio update failed", error));
+    void evaluateAlertsOnTicks(io, ticks).catch((error) => console.error("Mock alert evaluation failed", error));
     console.log("ticks:", ticks);
   }, 1000);
 }

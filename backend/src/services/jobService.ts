@@ -16,13 +16,14 @@ export function recordEvent(input: {
 }
 
 /** Claims one due job without allowing concurrent workers to claim the same row. */
-export async function claimNextJob(workerId: string): Promise<Job | null> {
+export async function claimNextJob(workerId: string, type?: string): Promise<Job | null> {
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "Job"
       WHERE "status" = 'PENDING'
         AND "runAt" <= NOW()
+        AND (${type ?? null}::text IS NULL OR "type" = ${type ?? null})
       ORDER BY "runAt" ASC, "createdAt" ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
@@ -65,7 +66,7 @@ export async function failJob(jobId: string, error: string, maxAttempts = 3) {
 export function startJobWorker(
   workerId: string,
   handler: (job: Job) => Promise<void>,
-  options: { pollIntervalMs?: number; maxAttempts?: number } = {},
+  options: { pollIntervalMs?: number; maxAttempts?: number; type?: string } = {},
 ) {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
   const maxAttempts = options.maxAttempts ?? 3;
@@ -74,7 +75,7 @@ export function startJobWorker(
   const poll = async () => {
     if (stopped) return;
     try {
-      const job = await claimNextJob(workerId);
+      const job = await claimNextJob(workerId, options.type);
       if (job) {
         try {
           await handler(job);

@@ -53,4 +53,24 @@ router.post("/watchlist", async (req: AuthRequest, res, next) => {
   }
 });
 
+import { getCurrentMarketStatus } from "../services/marketHoursService";
+import { generateHistoricalCandles } from "../services/historicalDataService";
+
+router.get("/status", (_req, res) => {
+  return res.json({ ok: true, marketStatus: getCurrentMarketStatus() });
+});
+
+router.get("/candles", (req, res, next) => {
+  try {
+    const symbol = z.string().trim().min(1).parse(req.query.symbol).toUpperCase();
+    const count = z.coerce.number().min(10).max(300).default(60).parse(req.query.count);
+    const interval = z.coerce.number().min(1).max(60).default(5).parse(req.query.interval);
+    const candles = generateHistoricalCandles(symbol, 1500, count, interval);
+    return res.json({ ok: true, symbol, candles });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 export default router;
+

@@ -17,7 +17,7 @@ export async function startKiteTicker(io: Server, userId: string, tokens: number
   });
   ticker.on("ticks", (ticks: Tick[]) => {
     io.to(userRoom(userId)).emit("kite:tick", ticks);
-    void updateLtpAndBroadcast(io, ticks, userId);
+    void updateLtpAndBroadcast(io, ticks, userId).catch((error) => console.error("Kite portfolio update failed", error));
   });
   ticker.on("error", (error) => console.error("KiteTicker error", error));
   ticker.on("disconnect", (error) => console.warn("KiteTicker disconnected", error?.message));

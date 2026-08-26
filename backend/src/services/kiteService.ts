@@ -151,22 +151,32 @@ export async function placeKiteLiveOrder(
   }
 ) {
   // 1. Resolve realistic order price for risk evaluation
-  let estimatedPrice = params.price;
-  if (!estimatedPrice || estimatedPrice <= 0) {
-    const [inst, holding] = await Promise.all([
-      prisma.instrument.findFirst({
-        where: { tradingsymbol: params.symbol, exchange: (params.exchange ?? "NSE") as any },
-      }),
-      prisma.holding.findFirst({
-        where: { userId, symbol: params.symbol },
-      }),
-    ]);
-    estimatedPrice = inst?.lastPrice ? Number(inst.lastPrice) : holding?.avg ? Number(holding.avg) : undefined;
+  // For MARKET and SL-M orders, ALWAYS ignore caller-supplied price and fetch fresh market price
+  let estimatedPrice: number | undefined;
+  if (params.order_type === "LIMIT" || params.order_type === "SL") {
+    estimatedPrice = params.price;
+  }
+
+  if (!estimatedPrice || estimatedPrice <= 0 || params.order_type === "MARKET" || params.order_type === "SL-M") {
+    try {
+      const [inst, holding] = await Promise.all([
+        prisma.instrument.findFirst({
+          where: { tradingsymbol: params.symbol, exchange: (params.exchange ?? "NSE") as any },
+        }),
+        prisma.holding.findFirst({
+          where: { userId, symbol: params.symbol },
+        }),
+      ]);
+      estimatedPrice = inst?.lastPrice ? Number(inst.lastPrice) : holding?.avg ? Number(holding.avg) : undefined;
+    } catch {
+      // Fall through to live reference price check
+    }
   }
 
   if (!estimatedPrice || estimatedPrice <= 0) {
     throw new AppError(400, `Cannot evaluate pre-trade risk for MARKET order on ${params.symbol}: no live reference price available. Please specify a LIMIT price.`);
   }
+
 
   // 2. Mandatory Pre-Trade Risk Check
   await validatePreTradeRisk({
@@ -179,6 +189,7 @@ export async function placeKiteLiveOrder(
 
   const client = await getKiteClient(userId);
   const variety = "regular";
+
 
 
   const orderResponse = await client.placeOrder(variety, {

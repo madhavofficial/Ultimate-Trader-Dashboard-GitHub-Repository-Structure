@@ -318,7 +318,10 @@ Return ONLY valid JSON matching this schema:
   // 1. Try Groq (Llama-3.3-70b-versatile)
   if (process.env.GROQ_API_KEY) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        signal: controller.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -334,6 +337,7 @@ Return ONLY valid JSON matching this schema:
           temperature: 0.1,
         }),
       });
+      clearTimeout(timeout);
 
       if (res.ok) {
         const data = await res.json();
@@ -363,7 +367,10 @@ Return ONLY valid JSON matching this schema:
   // 2. Try Gemini Flash
   if (process.env.GEMINI_API_KEY) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+        signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -371,6 +378,7 @@ Return ONLY valid JSON matching this schema:
           generationConfig: { response_mime_type: "application/json" },
         }),
       });
+      clearTimeout(timeout);
 
       if (res.ok) {
         const data = await res.json();
@@ -400,7 +408,10 @@ Return ONLY valid JSON matching this schema:
   // 3. Try OpenAI
   if (process.env.OPENAI_API_KEY) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        signal: controller.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -416,6 +427,7 @@ Return ONLY valid JSON matching this schema:
           temperature: 0.1,
         }),
       });
+      clearTimeout(timeout);
 
       if (res.ok) {
         const data = await res.json();
@@ -442,9 +454,7 @@ Return ONLY valid JSON matching this schema:
     }
   }
 
-
   // Deterministic NLP Fallback
   return analyzeNewsText(title, summary);
 }
-
 

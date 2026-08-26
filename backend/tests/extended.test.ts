@@ -42,3 +42,24 @@ test("respects explicit notification channel routing", async () => {
   const res = await dispatchNotification(input);
   assert.ok(res.status === "DELIVERED" || res.status === "SUPPRESSED_COOLDOWN");
 });
+
+test("rejects market orders when no live reference price is discoverable", async () => {
+  const { placeKiteLiveOrder } = await import("../src/services/kiteService");
+  await assert.rejects(
+    async () => {
+      // Trying to place MARKET order on unknown symbol with an artificially low price 0.01
+      await placeKiteLiveOrder("test-user-uuid-99", {
+        symbol: "UNKNOWN_NONEXISTENT_SYMBOL_XYZ",
+        transaction_type: "BUY",
+        order_type: "MARKET",
+        quantity: 1000,
+        price: 0.01, // Should be IGNORED by market order logic
+      });
+    },
+    (err: any) => {
+      assert.ok(err.message.includes("no live reference price available"));
+      return true;
+    }
+  );
+});
+

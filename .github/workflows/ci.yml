@@ -45,17 +45,19 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/utd_test?schema=public
-        run: npx prisma db push --skip-generate
+        run: npx prisma migrate deploy
 
-      - name: Run Backend Tests
+      - name: Run Backend Tests & Integration Suite
         working-directory: backend
         env:
           NODE_ENV: test
+          RUN_INTEGRATION_TESTS: "1"
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/utd_test?schema=public
           JWT_ACCESS_SECRET: testsecretaccesstokenmin32characterslong123
           JWT_REFRESH_SECRET: testsecretrefreshtokenmin32characterslong123
           MARKET_DATA_MODE: mock
         run: npm test
+
 
 
   frontend-build:

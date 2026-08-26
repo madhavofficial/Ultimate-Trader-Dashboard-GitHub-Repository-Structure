@@ -117,10 +117,9 @@ export async function dispatchNotification(input: DispatchNotificationInput) {
         status: deliveryStatus,
       },
     });
-  } catch (err) {
+  } catch {
     // Database logging error should not block notification delivery
   }
 
   return { status: deliveryStatus, notification: record };
 }
-

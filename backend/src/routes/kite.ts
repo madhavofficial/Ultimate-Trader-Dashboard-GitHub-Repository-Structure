@@ -105,7 +105,9 @@ router.post("/orders", authMiddleware, async (req: AuthRequest, res, next) => {
     const orderResult = await placeKiteLiveOrder(req.user!.id, {
       ...body,
       symbol: body.symbol,
+      price: body.order_type === "MARKET" ? undefined : body.price,
     });
+
 
     await writeAuditLog({
       userId: req.user!.id,

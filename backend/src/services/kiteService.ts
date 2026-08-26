@@ -150,17 +150,36 @@ export async function placeKiteLiveOrder(
     tag?: string;
   }
 ) {
-  // 1. Mandatory Pre-Trade Risk Check
+  // 1. Resolve realistic order price for risk evaluation
+  let estimatedPrice = params.price;
+  if (!estimatedPrice || estimatedPrice <= 0) {
+    const [inst, holding] = await Promise.all([
+      prisma.instrument.findFirst({
+        where: { tradingsymbol: params.symbol, exchange: (params.exchange ?? "NSE") as any },
+      }),
+      prisma.holding.findFirst({
+        where: { userId, symbol: params.symbol },
+      }),
+    ]);
+    estimatedPrice = inst?.lastPrice ? Number(inst.lastPrice) : holding?.avg ? Number(holding.avg) : undefined;
+  }
+
+  if (!estimatedPrice || estimatedPrice <= 0) {
+    throw new AppError(400, `Cannot evaluate pre-trade risk for MARKET order on ${params.symbol}: no live reference price available. Please specify a LIMIT price.`);
+  }
+
+  // 2. Mandatory Pre-Trade Risk Check
   await validatePreTradeRisk({
     userId,
     symbol: params.symbol,
     qty: params.quantity,
-    price: params.price ?? 100, // conservative estimate for market orders
+    price: estimatedPrice,
     side: params.transaction_type,
   });
 
   const client = await getKiteClient(userId);
   const variety = "regular";
+
 
   const orderResponse = await client.placeOrder(variety, {
     exchange: (params.exchange ?? "NSE") as any,

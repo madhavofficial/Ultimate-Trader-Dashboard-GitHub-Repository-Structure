@@ -15,8 +15,14 @@ export interface RawNewsArticle {
 
 const RSS_FEEDS = [
   { source: "ECONOMIC_TIMES", url: "https://economictimes.indiatimes.com/markets/rssfeeds/2146842.cms" },
+  { source: "ECONOMIC_TIMES_ECONOMY", url: "https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms" },
   { source: "MONEYCONTROL", url: "https://www.moneycontrol.com/rss/MCtopnews.xml" },
+  { source: "MONEYCONTROL_REPORTS", url: "https://www.moneycontrol.com/rss/marketreports.xml" },
+  { source: "MINT_MARKETS", url: "https://www.livemint.com/rss/markets" },
+  { source: "MINT_COMPANIES", url: "https://www.livemint.com/rss/companies" },
+  { source: "BUSINESS_STANDARD", url: "https://www.business-standard.com/rss/markets-106.rss" },
 ];
+
 
 export async function fetchLiveRssFeeds(): Promise<RawNewsArticle[]> {
   const articles: RawNewsArticle[] = [];

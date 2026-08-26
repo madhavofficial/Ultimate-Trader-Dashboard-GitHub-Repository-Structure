@@ -41,9 +41,11 @@ jobs:
         working-directory: backend
         run: npm ci
 
-      - name: Run Prisma Client Generation
+      - name: Apply Database Schema & Migrations
         working-directory: backend
-        run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/utd_test?schema=public
+        run: npx prisma db push --skip-generate
 
       - name: Run Backend Tests
         working-directory: backend
@@ -54,6 +56,7 @@ jobs:
           JWT_REFRESH_SECRET: testsecretrefreshtokenmin32characterslong123
           MARKET_DATA_MODE: mock
         run: npm test
+
 
   frontend-build:
     name: Frontend Build Check

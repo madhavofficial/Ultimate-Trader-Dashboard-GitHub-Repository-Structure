@@ -26,25 +26,30 @@ export async function dispatchNotification(input: DispatchNotificationInput) {
 
   // Check cooldown suppression
   if (lastFired && now - lastFired < COOLDOWN_PERIOD_MS) {
-    await prisma.alertNotification.create({
-      data: {
-        userId: input.userId,
-        alertId: input.alertId,
-        symbol: input.symbol,
-        channel: input.channel ?? "IN_APP",
-        title: input.title,
-        message: input.message,
-        status: "SUPPRESSED_COOLDOWN",
-      },
-    });
+    try {
+      await prisma.alertNotification.create({
+        data: {
+          userId: input.userId,
+          alertId: input.alertId,
+          symbol: input.symbol,
+          channel: input.channel ?? "IN_APP",
+          title: input.title,
+          message: input.message,
+          status: "SUPPRESSED_COOLDOWN",
+        },
+      });
+    } catch {
+      // Ignore DB error on suppressed cooldown log
+    }
     return { status: "SUPPRESSED_COOLDOWN" };
   }
+
 
   notificationCooldowns.set(cooldownKey, now);
   let deliveryStatus = "DELIVERED";
 
   // 1. In-App WebSockets
-  if (input.io) {
+  if (input.io && (!input.channel || input.channel === "IN_APP")) {
     input.io.to(userRoom(input.userId)).emit("alert:triggered", {
       alertId: input.alertId,
       symbol: input.symbol,
@@ -55,7 +60,7 @@ export async function dispatchNotification(input: DispatchNotificationInput) {
   }
 
   // 2. Telegram Bot Webhook
-  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
+  if ((!input.channel || input.channel === "TELEGRAM") && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     try {
       const tgText = `🔔 *${input.title}*\n\n📈 *Symbol:* ${input.symbol}\n💬 ${input.message}\n🕒 _${new Date().toLocaleTimeString()} IST_`;
       const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -75,7 +80,7 @@ export async function dispatchNotification(input: DispatchNotificationInput) {
   }
 
   // 3. Custom Webhook (Discord / Slack / Endpoint)
-  if (env.WEBHOOK_URL) {
+  if ((!input.channel || input.channel === "WEBHOOK") && env.WEBHOOK_URL) {
     try {
       const res = await fetch(env.WEBHOOK_URL, {
         method: "POST",
@@ -97,18 +102,25 @@ export async function dispatchNotification(input: DispatchNotificationInput) {
     }
   }
 
-  // Save persistent record in Database
-  const record = await prisma.alertNotification.create({
-    data: {
-      userId: input.userId,
-      alertId: input.alertId,
-      symbol: input.symbol,
-      channel: input.channel ?? "IN_APP",
-      title: input.title,
-      message: input.message,
-      status: deliveryStatus,
-    },
-  });
+
+  // Save persistent record in Database (graceful if DB offline)
+  let record: any = null;
+  try {
+    record = await prisma.alertNotification.create({
+      data: {
+        userId: input.userId,
+        alertId: input.alertId,
+        symbol: input.symbol,
+        channel: input.channel ?? "IN_APP",
+        title: input.title,
+        message: input.message,
+        status: deliveryStatus,
+      },
+    });
+  } catch (err) {
+    // Database logging error should not block notification delivery
+  }
 
   return { status: deliveryStatus, notification: record };
 }
+

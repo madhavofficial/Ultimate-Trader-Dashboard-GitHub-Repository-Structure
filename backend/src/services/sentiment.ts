@@ -269,35 +269,100 @@ export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
   };
 }
 
-export async function analyzeNewsAsync(title: string, summary: string): Promise<EnrichedEvent> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+import { z } from "zod";
 
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const prompt = `Analyze this Indian financial news headline and summary for stock market impact.
+const llmOutputSchema = z.object({
+  eventType: z.enum(["EARNINGS", "GOVT_POLICY", "COMMODITY", "GEOPOLITICAL", "MANAGEMENT", "REGULATORY", "MACRO"]).default("MACRO"),
+  primarySymbols: z.array(z.string().trim().min(1).max(16).transform((s) => s.toUpperCase())).default(["NIFTY"]),
+  sentimentScore: z.coerce.number().finite().default(0).transform((s) => Math.max(-1.0, Math.min(1.0, Number(s.toFixed(2))))),
+  confidence: z.coerce.number().finite().default(0.75).transform((c) => Math.max(0.1, Math.min(1.0, Number(c.toFixed(2))))),
+  impactHorizon: z.enum(["INTRADAY", "SHORT_TERM", "MEDIUM_TERM"]).default("SHORT_TERM"),
+  transmissionPath: z.enum(["DIRECT", "SUPPLY_CHAIN", "COMMODITY_INPUT", "SECTOR_PEER", "MACRO_FX"]).default("DIRECT"),
+  rippleImpacts: z.array(
+    z.object({
+      symbol: z.string().trim().min(1).max(16).transform((s) => s.toUpperCase()),
+      sector: z.string().default("General"),
+      impactDirection: z.enum(["POSITIVE", "NEGATIVE"]).default("POSITIVE"),
+      strength: z.coerce.number().finite().default(0.5).transform((s) => Math.max(0.1, Math.min(1.0, Number(s.toFixed(2))))),
+      rationale: z.string().default("Sector transmission effect"),
+    })
+  ).default([]),
+  reasoning: z.string().default("Structured LLM analysis"),
+});
+
+export async function analyzeNewsAsync(title: string, summary: string): Promise<EnrichedEvent> {
+  const prompt = `Analyze this Indian financial news headline and summary for stock market impact.
 Headline: ${title}
 Summary: ${summary}
 
 Return ONLY valid JSON matching this schema:
 {
   "eventType": "EARNINGS" | "GOVT_POLICY" | "COMMODITY" | "GEOPOLITICAL" | "MANAGEMENT" | "REGULATORY" | "MACRO",
-  "primarySymbols": string[], // NSE stock symbols like INFY, RELIANCE, TCS, etc.
-  "sentimentScore": number, // float from -1.0 (very bearish) to 1.0 (very bullish)
-  "confidence": number, // float from 0.0 to 1.0
+  "primarySymbols": ["INFY", "RELIANCE", "TCS"], // NSE tickers
+  "sentimentScore": 0.6, // float from -1.0 to 1.0
+  "confidence": 0.85, // float from 0.0 to 1.0
   "impactHorizon": "INTRADAY" | "SHORT_TERM" | "MEDIUM_TERM",
   "transmissionPath": "DIRECT" | "SUPPLY_CHAIN" | "COMMODITY_INPUT" | "SECTOR_PEER" | "MACRO_FX",
   "rippleImpacts": [
     {
-      "symbol": string,
-      "sector": string,
-      "impactDirection": "POSITIVE" | "NEGATIVE",
-      "strength": number,
-      "rationale": string
+      "symbol": "ASIANPAINT",
+      "sector": "Paints",
+      "impactDirection": "NEGATIVE",
+      "strength": 0.7,
+      "rationale": "Crude oil derivative input cost pressure"
     }
   ],
-  "reasoning": string
+  "reasoning": "Reasoning summary."
 }`;
 
+  // 1. Try Groq (Llama-3.3-70b-versatile)
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: "You are an expert Indian stock market quantitative analyst. Respond with pure JSON." },
+            { role: "user", content: prompt },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (content) {
+          const parsed = llmOutputSchema.parse(JSON.parse(content));
+          return {
+            title,
+            source: "LLM_GROQ",
+            summary: summary.slice(0, 300),
+            eventType: parsed.eventType,
+            primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
+            sentimentScore: parsed.sentimentScore,
+            confidence: parsed.confidence,
+            impactHorizon: parsed.impactHorizon,
+            transmissionPath: parsed.transmissionPath,
+            rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
+            reasoning: parsed.reasoning,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("Groq sentiment extraction failed:", err);
+    }
+  }
+
+  // 2. Try Gemini Flash
+  if (process.env.GEMINI_API_KEY) {
+    try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -311,28 +376,75 @@ Return ONLY valid JSON matching this schema:
         const data = await res.json();
         const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (rawJson) {
-          const parsed = JSON.parse(rawJson);
+          const parsed = llmOutputSchema.parse(JSON.parse(rawJson));
           return {
             title,
             source: "LLM_GEMINI",
             summary: summary.slice(0, 300),
-            eventType: parsed.eventType ?? "MACRO",
-            primarySymbols: Array.isArray(parsed.primarySymbols) && parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
-            sentimentScore: Number(parsed.sentimentScore ?? 0),
-            confidence: Number(parsed.confidence ?? 0.8),
-            impactHorizon: parsed.impactHorizon ?? "SHORT_TERM",
-            transmissionPath: parsed.transmissionPath ?? "DIRECT",
-            rippleImpacts: Array.isArray(parsed.rippleImpacts) ? parsed.rippleImpacts : [],
-            reasoning: parsed.reasoning ?? "Classified by Gemini Flash financial intelligence.",
+            eventType: parsed.eventType,
+            primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
+            sentimentScore: parsed.sentimentScore,
+            confidence: parsed.confidence,
+            impactHorizon: parsed.impactHorizon,
+            transmissionPath: parsed.transmissionPath,
+            rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
+            reasoning: parsed.reasoning,
           };
         }
       }
     } catch (err) {
-      console.warn("LLM sentiment enrichment failed, falling back to deterministic NLP:", err);
+      console.warn("Gemini sentiment extraction failed:", err);
     }
   }
 
-  // Fallback to fast deterministic NLP
+  // 3. Try OpenAI
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an expert Indian financial analyst. Output pure JSON." },
+            { role: "user", content: prompt },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (content) {
+          const parsed = llmOutputSchema.parse(JSON.parse(content));
+          return {
+            title,
+            source: "LLM_OPENAI",
+            summary: summary.slice(0, 300),
+            eventType: parsed.eventType,
+            primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
+            sentimentScore: parsed.sentimentScore,
+            confidence: parsed.confidence,
+            impactHorizon: parsed.impactHorizon,
+            transmissionPath: parsed.transmissionPath,
+            rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
+            reasoning: parsed.reasoning,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("OpenAI sentiment extraction failed:", err);
+    }
+  }
+
+
+  // Deterministic NLP Fallback
   return analyzeNewsText(title, summary);
 }
+
 

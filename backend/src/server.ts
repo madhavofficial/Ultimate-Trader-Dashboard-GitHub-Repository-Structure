@@ -24,6 +24,8 @@ import jwt from "jsonwebtoken";
 import { userRoom } from "./services/socketRooms";
 import { startInstrumentSyncScheduler } from "./services/instrumentService";
 import { startNewsWorkerScheduler, stopNewsWorkerScheduler } from "./workers/newsWorker";
+import { startRetentionScheduler } from "./services/retentionService";
+
 
 
 const corsOrigins = [env.CORS_ORIGIN, "http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001"];
@@ -116,11 +118,13 @@ export function createHttpServer() {
 export async function startServer() {
   const server = createHttpServer();
   server.listen(env.PORT, () => console.log(`Backend listening on http://localhost:${env.PORT}`));
+  const stopRetention = startRetentionScheduler();
   const stopInstrumentScheduler = env.MARKET_DATA_MODE === "kite" && env.KITE_SYNC_USER_ID
     ? startInstrumentSyncScheduler(env.KITE_SYNC_USER_ID)
     : undefined;
 
   const shutdown = async () => {
+    stopRetention();
     stopInstrumentScheduler?.();
     stopNewsWorkerScheduler();
     server.close();
@@ -130,6 +134,7 @@ export async function startServer() {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }
+
 
 if (require.main === module) {
   startServer().catch((error) => {

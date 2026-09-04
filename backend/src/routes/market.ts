@@ -34,10 +34,26 @@ router.post("/instruments/sync", async (req: AuthRequest, res, next) => {
   }
 });
 
+import { registerMockSymbol } from "../services/kiteMockStream";
+import { subscribeSymbolToKite, unsubscribeSymbolFromKite } from "../services/streamHandler";
+import { getLatestLtp } from "../services/portfolioService";
+
 router.get("/watchlist", async (req: AuthRequest, res, next) => {
   try {
     const watchlist = await prisma.watchlistItem.findMany({ where: { userId: req.user!.id }, orderBy: { symbol: "asc" } });
-    return res.json({ ok: true, watchlist });
+    for (const item of watchlist) {
+      void registerMockSymbol(item.symbol);
+    }
+    const enriched = watchlist.map((item) => {
+      const ltp = getLatestLtp(item.symbol);
+      return {
+        ...item,
+        lastPrice: ltp?.price ?? null,
+        quoteTimestamp: ltp?.timestamp ?? null,
+        source: ltp?.source ?? "none",
+      };
+    });
+    return res.json({ ok: true, watchlist: enriched });
   } catch (error) {
     return next(error);
   }
@@ -47,7 +63,22 @@ router.post("/watchlist", async (req: AuthRequest, res, next) => {
   try {
     const { symbol } = z.object({ symbol: z.string().trim().min(1).max(32).transform((value) => value.toUpperCase()) }).parse(req.body);
     const item = await prisma.watchlistItem.upsert({ where: { userId_symbol: { userId: req.user!.id, symbol } }, update: {}, create: { userId: req.user!.id, symbol } });
-    return res.status(201).json({ ok: true, item });
+    
+    // Automatically register symbol for mock tick streaming
+    await registerMockSymbol(symbol);
+    // Automatically subscribe symbol in active Kite ticker
+    await subscribeSymbolToKite(req.user!.id, symbol);
+
+    const ltp = getLatestLtp(symbol);
+    return res.status(201).json({
+      ok: true,
+      item: {
+        ...item,
+        lastPrice: ltp?.price ?? null,
+        quoteTimestamp: ltp?.timestamp ?? null,
+        source: ltp?.source ?? "none",
+      },
+    });
   } catch (error) {
     return next(error);
   }
@@ -58,6 +89,10 @@ router.delete("/watchlist/:symbol", async (req: AuthRequest, res, next) => {
     const rawSymbol = Array.isArray(req.params.symbol) ? req.params.symbol[0] : req.params.symbol;
     const symbol = z.string().trim().min(1).max(32).parse(rawSymbol).toUpperCase();
     await prisma.watchlistItem.deleteMany({ where: { userId: req.user!.id, symbol } });
+
+    // Automatically unsubscribe symbol from active Kite ticker if not held in portfolio
+    await unsubscribeSymbolFromKite(req.user!.id, symbol);
+
     return res.json({ ok: true, symbol });
   } catch (error) {
     return next(error);

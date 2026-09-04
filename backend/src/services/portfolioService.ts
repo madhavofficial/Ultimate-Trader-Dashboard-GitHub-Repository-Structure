@@ -3,8 +3,16 @@ import { prisma } from "../db/client";
 import { symbolsForTokens } from "./instrumentService";
 import { userRoom } from "./socketRooms";
 
-type IncomingTick = { symbol?: string; token?: number; instrument_token?: number; last_price: number };
-const ltpMap = new Map<string, { price: number; timestamp: number }>();
+type IncomingTick = { symbol?: string; token?: number; instrument_token?: number; last_price: number; timestamp?: number; source?: string };
+const ltpMap = new Map<string, { price: number; timestamp: number; source?: string }>();
+
+export function getLatestLtp(symbol: string) {
+  return ltpMap.get(symbol.toUpperCase());
+}
+
+export function getAllLatestLtps() {
+  return ltpMap;
+}
 
 export async function updateLtpAndBroadcast(io: Server, ticks: IncomingTick[], onlyUserId?: string) {
   const tokenIds = ticks.map((tick) => tick.instrument_token ?? tick.token).filter((token): token is number => typeof token === "number");
@@ -14,7 +22,7 @@ export async function updateLtpAndBroadcast(io: Server, ticks: IncomingTick[], o
   for (const tick of ticks) {
     const symbol = tick.symbol ?? (tick.instrument_token || tick.token ? tokenSymbols.get(tick.instrument_token ?? tick.token!) : undefined);
     if (!symbol || !Number.isFinite(tick.last_price) || tick.last_price <= 0) continue;
-    ltpMap.set(symbol, { price: tick.last_price, timestamp: Date.now() });
+    ltpMap.set(symbol, { price: tick.last_price, timestamp: tick.timestamp ?? Date.now(), source: tick.source ?? "stream" });
     symbols.add(symbol);
   }
   if (symbols.size === 0) return;

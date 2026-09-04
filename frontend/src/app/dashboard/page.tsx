@@ -151,7 +151,19 @@ type BrokerOrder = {
   order_timestamp: string;
 };
 
-type Tick = { symbol?: string; last_price: number };
+type Tick = {
+  symbol?: string;
+  last_price: number;
+  change?: number;
+  timestamp?: number;
+  source?: "kite" | "mock";
+};
+
+type QuoteMeta = {
+  timestamp: number;
+  source: "kite" | "mock" | "cache";
+  change?: number;
+};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? API_URL;
@@ -164,6 +176,11 @@ export default function DashboardPage() {
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [prices, setPrices] = useState<Record<string, number>>({});
+  const [quoteMeta, setQuoteMeta] = useState<Record<string, QuoteMeta>>({});
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [lastSocketMessageAt, setLastSocketMessageAt] = useState<number | null>(null);
+  const [socketConnected, setSocketConnected] = useState(false);
+
   const [events, setEvents] = useState<MarketEvent[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
@@ -203,6 +220,11 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!token) return;
 
     const socket: Socket = io(SOCKET_URL, {
@@ -210,11 +232,29 @@ export default function DashboardPage() {
       withCredentials: true,
     });
 
+    socket.on("connect", () => setSocketConnected(true));
+    socket.on("disconnect", () => setSocketConnected(false));
+
     const onTicks = (ticks: Tick[]) => {
+      const now = Date.now();
+      setLastSocketMessageAt(now);
       setPrices((prev) => {
         const next = { ...prev };
         ticks.forEach((t) => {
           if (t.symbol) next[t.symbol] = t.last_price;
+        });
+        return next;
+      });
+      setQuoteMeta((prev) => {
+        const next = { ...prev };
+        ticks.forEach((t) => {
+          if (t.symbol) {
+            next[t.symbol] = {
+              timestamp: t.timestamp ?? now,
+              source: t.source ?? ((t as any).instrument_token ? "kite" : "mock"),
+              change: t.change,
+            };
+          }
         });
         return next;
       });
@@ -244,6 +284,8 @@ export default function DashboardPage() {
     socket.on("alert:triggered", onAlertTriggered);
 
     return () => {
+      socket.off("connect");
+      socket.off("disconnect");
       socket.off("tick", onTicks);
       socket.off("kite:tick", onTicks);
       socket.off("portfolio:update");
@@ -345,7 +387,30 @@ export default function DashboardPage() {
 
   async function loadWatchlist(accessToken: string) {
     const res = await fetch(`${API_URL}/market/watchlist`, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (res.ok) setDynamicWatchlist((await res.json()).watchlist?.map((item: { symbol: string }) => item.symbol) ?? []);
+    if (res.ok) {
+      const data = await res.json();
+      const items: Array<{ symbol: string; lastPrice?: number | null; quoteTimestamp?: number | null; source?: string }> = data.watchlist ?? [];
+      setDynamicWatchlist(items.map((item) => item.symbol));
+      setPrices((prev) => {
+        const next = { ...prev };
+        items.forEach((it) => {
+          if (it.lastPrice && !next[it.symbol]) next[it.symbol] = Number(it.lastPrice);
+        });
+        return next;
+      });
+      setQuoteMeta((prev) => {
+        const next = { ...prev };
+        items.forEach((it) => {
+          if (it.quoteTimestamp && !next[it.symbol]) {
+            next[it.symbol] = {
+              timestamp: it.quoteTimestamp,
+              source: it.source === "kite" ? "kite" : "mock",
+            };
+          }
+        });
+        return next;
+      });
+    }
   }
 
   async function loadIntelligence(accessToken: string) {
@@ -531,6 +596,20 @@ export default function DashboardPage() {
         setTradeMessage("❌ Could not save ticker to watchlist");
         return;
       }
+      const data = await res.json();
+      const item = data.item;
+      if (item?.lastPrice) {
+        setPrices((prev) => ({ ...prev, [normalizedSymbol]: Number(item.lastPrice) }));
+      }
+      if (item?.quoteTimestamp) {
+        setQuoteMeta((prev) => ({
+          ...prev,
+          [normalizedSymbol]: {
+            timestamp: item.quoteTimestamp,
+            source: item.source === "kite" ? "kite" : "mock",
+          },
+        }));
+      }
       setDynamicWatchlist((current) => [...current, normalizedSymbol]);
     }
     selectSymbol(normalizedSymbol);
@@ -607,11 +686,26 @@ export default function DashboardPage() {
       {/* Header with Market Session & Kill Switch */}
       <header className="header">
         <div>
-          <div className="row" style={{ gap: 12 }}>
+          <div className="row" style={{ gap: 12, alignItems: "center" }}>
             <h1>Market Intelligence Cockpit</h1>
             <span className={`badge ${marketStatus?.isOpen ? "badge-positive" : "badge-neutral"}`}>
               ● {marketStatus?.session ?? "SESSION"} ({marketStatus?.istTime ?? "IST"})
             </span>
+            {socketConnected ? (
+              lastSocketMessageAt && currentTime - lastSocketMessageAt < 5000 ? (
+                <span className="badge badge-live" title="Websocket receiving real-time ticks">
+                  ⚡ Stream: Live ({quoteMeta[selectedChartSymbol]?.source === "kite" ? "Zerodha Kite" : "Mock Feed"})
+                </span>
+              ) : (
+                <span className="badge badge-warning" title="No ticks received in over 5 seconds">
+                  🟡 Stream: Delayed ({Math.floor((currentTime - (lastSocketMessageAt ?? currentTime)) / 1000)}s)
+                </span>
+              )
+            ) : (
+              <span className="badge badge-stale" title="Socket disconnected">
+                🔴 Stream: Disconnected
+              </span>
+            )}
             {riskSettings?.killSwitchActive && (
               <span className="badge badge-negative" style={{ animation: "pulse 1s infinite" }}>
                 ⚠️ KILL SWITCH ACTIVE
@@ -663,36 +757,101 @@ export default function DashboardPage() {
       </div>
 
       <section className="ticker">
-        {dynamicWatchlist.map((item) => {
-          const currentPrice = prices[item] ?? portfolio?.holdings.find((h) => h.symbol === item)?.lastPrice ?? 0;
-          const isSelected = selectedChartSymbol === item;
-          return (
-            <div
-              className="panel ticker-card"
-              key={item}
-              style={{ cursor: "pointer", borderColor: isSelected ? "var(--blue)" : "var(--line)" }}
-              onClick={() => selectSymbol(item)}
-            >
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted">NSE · {item}</span>
-                <div className="row" style={{ gap: 6 }}>
-                  <span className="badge badge-blue">LTP</span>
-                  <button
-                    type="button"
-                    className="danger"
-                    aria-label={`Remove ${item} from watchlist`}
-                    onClick={(event) => { event.stopPropagation(); void removeSymbolFromWatchlist(item); }}
-                    style={{ padding: "2px 6px", fontSize: 11 }}
-                  >
-                    ✕
-                  </button>
+        {dynamicWatchlist.length === 0 ? (
+          <div className="panel" style={{ width: "100%", padding: "16px", textAlign: "center" }}>
+            <span className="muted">Your watchlist is empty. Search any NSE symbol above to start tracking live ticks.</span>
+          </div>
+        ) : (
+          dynamicWatchlist.map((item) => {
+            const meta = quoteMeta[item];
+            const currentPrice = prices[item] ?? portfolio?.holdings.find((h) => h.symbol === item)?.lastPrice ?? 0;
+            const holding = portfolio?.holdings.find((h) => h.symbol === item);
+            const isSelected = selectedChartSymbol === item;
+            const isClosed = marketStatus && !marketStatus.isOpen;
+            const ageSeconds = meta?.timestamp ? Math.max(0, Math.floor((currentTime - meta.timestamp) / 1000)) : null;
+
+            let freshnessBadgeClass = "badge-gray";
+            let freshnessLabel = "● Awaiting";
+
+            if (isClosed) {
+              freshnessBadgeClass = "badge-gray";
+              freshnessLabel = "● Closed";
+            } else if (ageSeconds !== null) {
+              if (ageSeconds < 4) {
+                freshnessBadgeClass = "badge-live";
+                freshnessLabel = `● Live <${Math.max(1, ageSeconds)}s`;
+              } else if (ageSeconds <= 15) {
+                freshnessBadgeClass = "badge-warning";
+                freshnessLabel = `● Delayed ${ageSeconds}s`;
+              } else {
+                freshnessBadgeClass = "badge-stale";
+                freshnessLabel = `● Stale ${ageSeconds}s`;
+              }
+            }
+
+            const isConflicting = holding && currentPrice > 0 && Math.abs(currentPrice - holding.averagePrice) / holding.averagePrice > 0.35;
+
+            return (
+              <div
+                className="panel ticker-card"
+                key={item}
+                style={{
+                  cursor: "pointer",
+                  borderColor: isSelected ? "var(--blue)" : isConflicting ? "var(--red)" : "var(--line)",
+                  background: isConflicting ? "rgba(239, 68, 68, 0.04)" : undefined,
+                }}
+                onClick={() => selectSymbol(item)}
+              >
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <span className="muted" style={{ fontWeight: 600 }}>NSE · {item}</span>
+                    <div style={{ marginTop: 3 }}>
+                      <span className={`badge ${freshnessBadgeClass}`} style={{ fontSize: 9, padding: "2px 5px" }}>
+                        {freshnessLabel}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="row" style={{ gap: 4 }}>
+                    <span className="badge badge-blue" style={{ fontSize: 9, padding: "2px 5px" }}>
+                      {meta?.source === "kite" ? "KITE" : "MOCK"}
+                    </span>
+                    <button
+                      type="button"
+                      className="danger"
+                      aria-label={`Remove ${item} from watchlist`}
+                      onClick={(event) => { event.stopPropagation(); void removeSymbolFromWatchlist(item); }}
+                      style={{ padding: "1px 5px", fontSize: 10, lineHeight: "14px" }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div className="metric" style={{ display: "flex", alignItems: "baseline", gap: 6, margin: "8px 0 4px" }}>
+                  <span>₹{currentPrice > 0 ? currentPrice.toFixed(2) : "—"}</span>
+                  {meta?.change !== undefined && meta.change !== 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: meta.change >= 0 ? "var(--green)" : "var(--red)" }}>
+                      {meta.change >= 0 ? "+" : ""}{meta.change.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="row" style={{ justifyContent: "space-between", fontSize: 10 }}>
+                  <span className="muted">
+                    {meta?.timestamp ? new Date(meta.timestamp).toLocaleTimeString() : "Awaiting quote"}
+                  </span>
+                  {isConflicting ? (
+                    <span className="badge badge-stale" style={{ fontSize: 9, padding: "1px 4px" }} title="Quote diverges >35% from portfolio average">
+                      ⚠️ Divergent
+                    </span>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 10 }}>Click to chart</span>
+                  )}
                 </div>
               </div>
-              <div className="metric">₹{currentPrice > 0 ? currentPrice.toFixed(2) : "—"}</div>
-              <span className="muted" style={{ fontSize: 10 }}>Click to chart &amp; trade</span>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </section>
 
       {/* Navigation Tabs */}

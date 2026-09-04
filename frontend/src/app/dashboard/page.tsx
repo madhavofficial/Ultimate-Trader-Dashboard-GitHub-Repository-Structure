@@ -170,7 +170,7 @@ export default function DashboardPage() {
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [selectedChartSymbol, setSelectedChartSymbol] = useState("INFY");
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState("");
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [toasts, setToasts] = useState<TriggeredToast[]>([]);
 
@@ -180,22 +180,22 @@ export default function DashboardPage() {
   const [executionMode, setExecutionMode] = useState<"PAPER" | "LIVE_BROKER">("PAPER");
 
   // Dynamic Watchlist & Search state
-  const [dynamicWatchlist, setDynamicWatchlist] = useState<string[]>(["INFY", "RELIANCE", "TCS", "ASIANPAINT", "INDIGO"]);
+  const [dynamicWatchlist, setDynamicWatchlist] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchInstrument[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   // Trade form state
-  const [symbol, setSymbol] = useState("INFY");
+  const [symbol, setSymbol] = useState("");
   const [qty, setQty] = useState("5");
-  const [price, setPrice] = useState("1520");
+  const [price, setPrice] = useState("");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [tradeMessage, setTradeMessage] = useState("");
 
   // Alert state
-  const [alertSymbol, setAlertSymbol] = useState("INFY");
+  const [alertSymbol, setAlertSymbol] = useState("");
   const [alertCondition, setAlertCondition] = useState<"GT" | "LT">("GT");
-  const [alertValue, setAlertValue] = useState("1550");
+  const [alertValue, setAlertValue] = useState("");
   const [alertMessage, setAlertMessage] = useState("");
 
   useEffect(() => {
@@ -264,6 +264,21 @@ export default function DashboardPage() {
     void loadCandles(selectedChartSymbol, token);
   }, [selectedChartSymbol, token]);
 
+  useEffect(() => {
+    if (selectedChartSymbol || (!dynamicWatchlist.length && !portfolio?.holdings.length)) return;
+    const firstSymbol = dynamicWatchlist[0] ?? portfolio?.holdings[0]?.symbol;
+    if (!firstSymbol) return;
+    setSelectedChartSymbol(firstSymbol);
+    setSymbol(firstSymbol);
+    setAlertSymbol(firstSymbol);
+    const holding = portfolio?.holdings.find((item) => item.symbol === firstSymbol);
+    const livePrice = prices[firstSymbol] ?? holding?.lastPrice;
+    if (livePrice && livePrice > 0) {
+      setPrice(String(livePrice));
+      setAlertValue(String(livePrice));
+    }
+  }, [dynamicWatchlist, portfolio, prices, selectedChartSymbol]);
+
   // Debounced instrument search
   useEffect(() => {
     if (!token || searchQuery.trim().length < 2) {
@@ -293,6 +308,7 @@ export default function DashboardPage() {
   }, [searchQuery, token]);
 
   async function loadAllData(accessToken: string) {
+    await loadWatchlist(accessToken);
     await Promise.all([
       loadPortfolio(accessToken),
       loadIntelligence(accessToken),
@@ -325,6 +341,11 @@ export default function DashboardPage() {
   async function loadPortfolio(accessToken: string) {
     const res = await fetch(`${API_URL}/portfolio`, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (res.ok) setPortfolio((await res.json()).portfolio);
+  }
+
+  async function loadWatchlist(accessToken: string) {
+    const res = await fetch(`${API_URL}/market/watchlist`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.ok) setDynamicWatchlist((await res.json()).watchlist?.map((item: { symbol: string }) => item.symbol) ?? []);
   }
 
   async function loadIntelligence(accessToken: string) {
@@ -495,15 +516,58 @@ export default function DashboardPage() {
     }
   }
 
-  function addSymbolToWatchlist(newSym: string) {
-    if (!dynamicWatchlist.includes(newSym)) {
-      setDynamicWatchlist([...dynamicWatchlist, newSym]);
+  async function addSymbolToWatchlist(newSym: string) {
+    if (!token) return;
+    const normalizedSymbol = newSym.toUpperCase();
+    if (!dynamicWatchlist.includes(normalizedSymbol)) {
+      const res = await fetch(`${API_URL}/market/watchlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol: normalizedSymbol }),
+      });
+      if (!res.ok) {
+        setTradeMessage("❌ Could not save ticker to watchlist");
+        return;
+      }
+      setDynamicWatchlist((current) => [...current, normalizedSymbol]);
     }
-    setSelectedChartSymbol(newSym);
-    setSymbol(newSym);
-    setAlertSymbol(newSym);
+    selectSymbol(normalizedSymbol);
     setSearchQuery("");
     setSearchResults([]);
+  }
+
+  async function removeSymbolFromWatchlist(symbolToRemove: string) {
+    if (!token) return;
+    const res = await fetch(`${API_URL}/market/watchlist/${encodeURIComponent(symbolToRemove)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      setTradeMessage("❌ Could not remove ticker from watchlist");
+      return;
+    }
+    setDynamicWatchlist((current) => current.filter((item) => item !== symbolToRemove));
+    if (selectedChartSymbol === symbolToRemove) {
+      const nextSymbol = dynamicWatchlist.find((item) => item !== symbolToRemove) ?? portfolio?.holdings.find((item) => item.symbol !== symbolToRemove)?.symbol ?? "";
+      if (nextSymbol) selectSymbol(nextSymbol);
+      else {
+        setSelectedChartSymbol("");
+        setSymbol("");
+        setAlertSymbol("");
+        setPrice("");
+      }
+    }
+  }
+
+  function selectSymbol(selectedSymbol: string) {
+    setSelectedChartSymbol(selectedSymbol);
+    setSymbol(selectedSymbol);
+    setAlertSymbol(selectedSymbol);
+    const livePrice = prices[selectedSymbol] ?? portfolio?.holdings.find((item) => item.symbol === selectedSymbol)?.lastPrice;
+    if (livePrice && livePrice > 0) {
+      setPrice(String(livePrice));
+      setAlertValue(String(livePrice));
+    }
   }
 
   if (!token) {
@@ -582,7 +646,7 @@ export default function DashboardPage() {
             {searchResults.map((item) => (
               <div
                 key={item.instrumentToken}
-                onClick={() => addSymbolToWatchlist(item.tradingsymbol)}
+                onClick={() => void addSymbolToWatchlist(item.tradingsymbol)}
                 style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", cursor: "pointer", display: "flex", justifyContent: "space-between" }}
               >
                 <div>
@@ -605,15 +669,22 @@ export default function DashboardPage() {
               className="panel ticker-card"
               key={item}
               style={{ cursor: "pointer", borderColor: isSelected ? "var(--blue)" : "var(--line)" }}
-              onClick={() => {
-                setSelectedChartSymbol(item);
-                setSymbol(item);
-                setAlertSymbol(item);
-              }}
+              onClick={() => selectSymbol(item)}
             >
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <span className="muted">NSE · {item}</span>
-                <span className="badge badge-blue">LTP</span>
+                <div className="row" style={{ gap: 6 }}>
+                  <span className="badge badge-blue">LTP</span>
+                  <button
+                    type="button"
+                    className="danger"
+                    aria-label={`Remove ${item} from watchlist`}
+                    onClick={(event) => { event.stopPropagation(); void removeSymbolFromWatchlist(item); }}
+                    style={{ padding: "2px 6px", fontSize: 11 }}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
               <div className="metric">₹{currentPrice > 0 ? currentPrice.toFixed(2) : "—"}</div>
               <span className="muted" style={{ fontSize: 10 }}>Click to chart &amp; trade</span>

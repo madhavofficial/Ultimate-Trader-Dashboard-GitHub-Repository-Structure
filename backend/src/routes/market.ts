@@ -53,6 +53,17 @@ router.post("/watchlist", async (req: AuthRequest, res, next) => {
   }
 });
 
+router.delete("/watchlist/:symbol", async (req: AuthRequest, res, next) => {
+  try {
+    const rawSymbol = Array.isArray(req.params.symbol) ? req.params.symbol[0] : req.params.symbol;
+    const symbol = z.string().trim().min(1).max(32).parse(rawSymbol).toUpperCase();
+    await prisma.watchlistItem.deleteMany({ where: { userId: req.user!.id, symbol } });
+    return res.json({ ok: true, symbol });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 import { getCurrentMarketStatus } from "../services/marketHoursService";
 import { fetchKiteHistoricalCandles, generateHistoricalCandles } from "../services/historicalDataService";
 
@@ -74,5 +85,4 @@ router.get("/candles", async (req: AuthRequest, res, next) => {
 
 
 export default router;
-
 

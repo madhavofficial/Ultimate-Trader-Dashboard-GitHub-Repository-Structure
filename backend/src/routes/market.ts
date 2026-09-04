@@ -65,7 +65,7 @@ router.delete("/watchlist/:symbol", async (req: AuthRequest, res, next) => {
 });
 
 import { getCurrentMarketStatus } from "../services/marketHoursService";
-import { fetchKiteHistoricalCandles, generateHistoricalCandles } from "../services/historicalDataService";
+import { fetchKiteHistoricalCandles } from "../services/historicalDataService";
 
 router.get("/status", (_req, res) => {
   return res.json({ ok: true, marketStatus: getCurrentMarketStatus() });
@@ -85,4 +85,3 @@ router.get("/candles", async (req: AuthRequest, res, next) => {
 
 
 export default router;
-

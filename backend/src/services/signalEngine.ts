@@ -1,6 +1,7 @@
 import { Server } from "socket.io";
 import { prisma } from "../db/client";
 import { SECTOR_KNOWLEDGE_GRAPH } from "./sentiment";
+import { fetchKiteHistoricalCandles } from "./historicalDataService";
 
 export interface TechnicalSnapshot {
   symbol: string;
@@ -66,11 +67,12 @@ export function computeTechnicalIndicators(symbol: string, currentPrice: number,
   };
 }
 
-export async function generateCompositeSignal(symbol: string, currentPrice: number, io?: Server) {
-  // 1. Technical Score
-  // Simulated price series with noise around currentPrice
-  const series = Array.from({ length: 30 }, (_, i) => currentPrice * (1 + (Math.sin(i / 3) * 0.02)));
-  const technical = computeTechnicalIndicators(symbol, currentPrice, series);
+export async function generateCompositeSignalForUser(userId: string, symbol: string, currentPrice: number, io?: Server) {
+  // Technical indicators are only calculated from real broker history.
+  const candles = userId ? await fetchKiteHistoricalCandles(userId, symbol, "5minute", 50) : [];
+  const technical = candles.length >= 20
+    ? computeTechnicalIndicators(symbol, currentPrice, candles.map((candle) => candle.close))
+    : null;
 
   // 2. News & Sentiment Score
   const recentEvents = await prisma.event.findMany({
@@ -81,7 +83,9 @@ export async function generateCompositeSignal(symbol: string, currentPrice: numb
 
   let sentimentScore = 0;
   let relevantNewsCount = 0;
-  let matchedRationale = "Neutral price momentum and steady order book depth.";
+  let matchedRationale = technical
+    ? "Neutral price momentum and steady order book depth."
+    : "No technical setup generated: insufficient historical market data.";
 
   for (const ev of recentEvents) {
     const payload = ev.payload as any;
@@ -109,9 +113,9 @@ export async function generateCompositeSignal(symbol: string, currentPrice: numb
   macroScore = Math.max(-1.0, Math.min(1.0, Number(macroScore.toFixed(2))));
 
   // 4. Weighted Composite Score: 40% Tech + 35% News Sentiment + 25% Macro/Sector
-  const compositeScore = Number(
-    (0.4 * technical.technicalScore + 0.35 * sentimentScore + 0.25 * macroScore).toFixed(2)
-  );
+  const compositeScore = technical
+    ? Number((0.4 * technical.technicalScore + 0.35 * sentimentScore + 0.25 * macroScore).toFixed(2))
+    : Number((0.7 * sentimentScore + 0.3 * macroScore).toFixed(2));
 
   const direction = compositeScore >= 0.2 ? "BULLISH" : compositeScore <= -0.2 ? "BEARISH" : "NEUTRAL";
   const confidence = Number((0.65 + Math.abs(compositeScore) * 0.3).toFixed(2));
@@ -121,19 +125,15 @@ export async function generateCompositeSignal(symbol: string, currentPrice: numb
       symbol,
       direction,
       compositeScore,
-      technicalScore: technical.technicalScore,
+      technicalScore: technical?.technicalScore ?? null,
       sentimentScore,
       macroScore,
       confidence,
       horizon: "SWING",
       rationale: matchedRationale,
-      keyFactors: {
-        sma20: technical.sma20,
-        sma50: technical.sma50,
-        rsi: technical.rsi,
-        sentimentScore,
-        macroScore,
-      },
+      keyFactors: technical
+        ? { sma20: technical.sma20, sma50: technical.sma50, rsi: technical.rsi, sentimentScore, macroScore }
+        : { sentimentScore, macroScore, dataQuality: "INSUFFICIENT_HISTORICAL_DATA" },
       status: "ACTIVE",
     },
   });

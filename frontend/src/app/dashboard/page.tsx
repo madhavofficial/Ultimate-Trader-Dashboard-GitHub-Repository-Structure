@@ -48,7 +48,7 @@ type Signal = {
   symbol: string;
   direction: "BULLISH" | "BEARISH" | "NEUTRAL";
   compositeScore: number;
-  technicalScore: number;
+  technicalScore: number | null;
   sentimentScore: number;
   macroScore: number;
   confidence: number;
@@ -374,6 +374,8 @@ export default function DashboardPage() {
   }
 
   async function loadCandles(chartSym: string, accessToken: string) {
+    if (!chartSym) return;
+    setCandles([]);
     const res = await fetch(`${API_URL}/market/candles?symbol=${chartSym}&count=50&interval=5minute`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -892,8 +894,10 @@ export default function DashboardPage() {
               {selectedChartSymbol} · 5m Candlestick Price Action
               <span className="badge badge-blue">{candles.length} Candles</span>
             </h2>
-            <div style={{ display: "flex", alignItems: "end", gap: 4, height: 160, padding: "12px 0", background: "#0a0f1d", borderRadius: 8, paddingLeft: 12, paddingRight: 12 }}>
-              {candles.map((c, idx) => {
+            <div style={{ display: "flex", alignItems: "center", justifyContent: candles.length === 0 ? "center" : "end", gap: 4, height: 160, padding: "12px 0", background: "#0a0f1d", borderRadius: 8, paddingLeft: 12, paddingRight: 12 }}>
+              {candles.length === 0 ? (
+                <span className="muted">Candlestick history unavailable. Awaiting live ticks or broker historical connection.</span>
+              ) : candles.map((c, idx) => {
                 const isGreen = c.close >= c.open;
                 const minPrice = Math.min(...candles.map((x) => x.low));
                 const maxPrice = Math.max(...candles.map((x) => x.high));

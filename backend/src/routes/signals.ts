@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { prisma } from "../db/client";
-import { generateCompositeSignal } from "../services/signalEngine";
+import { generateCompositeSignalForUser } from "../services/signalEngine";
 
 const router = Router();
 router.use(authMiddleware);
@@ -30,7 +30,7 @@ router.post("/generate", async (req: AuthRequest, res, next) => {
     }).parse(req.body);
 
     const io = req.app.get("io");
-    const signal = await generateCompositeSignal(symbol, price, io);
+    const signal = await generateCompositeSignalForUser(req.user!.id, symbol, price, io);
     return res.json({ ok: true, signal });
   } catch (error) {
     return next(error);

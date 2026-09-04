@@ -1,5 +1,15 @@
 {
-  "dependencies": {
-    "socket.io-client": "^4.8.1"
+  "name": "ultimate-trader-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smart Market Watchlist & Real-Time Trading Terminal",
+  "scripts": {
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:backend": "npm run build --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend",
+    "test:backend": "npm run test --prefix backend",
+    "test": "npm run test --prefix backend"
   }
 }

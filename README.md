@@ -1,138 +1,289 @@
-# smart-market-watchlist
+# Smart Market Watchlist
 
 > **Know what changed while you were away — and why it matters.**
 
-An engineering submission for the **Code, by Groww 2026** challenge (*Theme: Build a Smart Market Watchlist*).
+An independent engineering submission for the **Code, by Groww 2026** challenge (*Theme: Build a Smart Market Watchlist*).
 
 *Note: This project is an independent hackathon submission and is not an official Groww product, nor is it affiliated with Groww.*
 
 ---
 
-## 100-Word Product Pitch
+## What It Is & Why It Exists
 
-Smart Market Watchlist transforms passive stock tracking into an intelligent market briefing for Indian equities. While conventional watchlists display static current prices, our engine preserves timestamped user checkpoints to detect what meaningfully changed while you were away. Upon returning, an in-memory change detection engine evaluates price swings, volume anomalies, benchmark alpha against NIFTY 50, and corporate catalysts using a deterministic four-factor attention scoring model. Combined with an intelligent market freshness evaluator that clearly distinguishes closed trading sessions from stale feeds, the system delivers ranked, explainable stock briefings with zero broker dependencies through a dual-mode live or mock market data architecture.
+Conventional market watchlists are **stateless and single-moment**. They show the current market price (LTP) and percentage change relative to the previous day's close ($T_{\text{market\_open}} \rightarrow T_{\text{now}}$).
+
+If an investor steps away for three hours and returns, a display showing `+0.4% today` conceals the real story:
+- Did the stock plunge $-3.5\%$ on heavy volume and suddenly rebound?
+- Did it sharply diverge from a falling NIFTY 50 benchmark?
+- Did a critical regulatory notice or corporate earnings release break while they were away?
+
+**Smart Market Watchlist is stateful.** It introduces **observation checkpoints** to answer the fundamental question:
+
+> *"What meaningfully changed in my watchlist since I last checked — and what deserves my attention now?"*
+
+The system computes state transitions relative to when the user was last active ($T_{\text{checkpoint}} \rightarrow T_{\text{now}}$), triages market noise from meaningful shifts, and generates prioritized, explainable briefings.
 
 ---
 
-## The Primary Product Story
+## How It Compares
 
-### The Problem with Conventional Watchlists
-Conventional market watchlists display only the **current market snapshot** (current LTP, day's high/low, and daily percentage change from previous close). If a user steps away for two hours and returns, a display showing `+0.4% today` conceals the actual story: did the stock drop 3% on high volume and recover? Did it diverge sharply from NIFTY 50? Did a major regulatory catalyst break while they were away?
+| Dimension | Conventional Watchlist | Smart Market Watchlist |
+| :--- | :--- | :--- |
+| **Temporal Reference** | Previous day's close ($T_{\text{prev\_close}} \rightarrow T_{\text{now}}$) | User's personal last-visited checkpoint ($T_{\text{checkpoint}} \rightarrow T_{\text{now}}$) |
+| **Statefulness** | Stateless (same view for every user) | Stateful (persisted per-user checkpoints in PostgreSQL) |
+| **Information Density** | Raw price ticks and percentage noise | Triage into 🔴 `NEEDS ATTENTION`, 🟡 `WORTH A LOOK`, ⚪ `UNCHANGED` |
+| **Prioritization Model** | Sorting by 1D price gainers/losers | 4-Factor Attention Score (Price, Volume Pace, Benchmark Alpha, Catalysts) |
+| **Noise Handling** | Every tick updates the display | Micro-fluctuations ($< 1.0\%$) grouped under Unchanged; hash-based continuity suppression |
+| **Explainability** | Unexplained green/red numbers | Factual deterministic reason badges explaining *why* an item is flagged |
+| **Freshness Intelligence** | Binary (Open vs Closed) | 5-state engine enforcing that settled sessions are valid (`MARKET_CLOSED != STALE`) |
 
-### The Smart Watchlist Solution
-Smart Market Watchlist introduces **stateful observation checkpoints**. It remembers exactly when the user last acknowledged their watchlist and computes the precise delta that accumulated during their absence.
+---
 
-Rather than flooding the user with raw ticks or arbitrary alert noise, it executes a deterministic pipeline:
+## Core Workflow
 
 ```text
-Current market state
-        ↓
-User checkpoint (last visit)
-        ↓
-Delta detection (ΔPrice, Volume Pace, Benchmark Alpha, New Catalysts)
-        ↓
-Attention scoring (0 - 100 deterministic multi-factor model)
-        ↓
-Deterministic reasons (Factual, human-readable explanations)
-        ↓
-Prioritized watchlist briefing (NEEDS ATTENTION → WORTH A LOOK → UNCHANGED)
+Current Market State (LTP, Volume, Timestamps)
+                  ↓
+User's Last Checkpoint (Persisted Baseline)
+                  ↓
+Meaningful Change Detection (ΔPrice, Volume Pace Ratio, Benchmark Alpha, Ingested Catalysts)
+                  ↓
+Multi-Factor Attention Scoring (0 - 100 Normalized Formula)
+                  ↓
+Priority Classification (🔴 NEEDS ATTENTION → 🟡 WORTH A LOOK → ⚪ UNCHANGED)
+                  ↓
+Deterministic Explanation (Category-Tagged Factual Reason Badges)
+                  ↓
+User Action ("Mark Checkpoint" Acknowledges State & Advances Baseline)
 ```
 
 ---
 
-## Meaningful Change Model
+## Intelligence Architecture: Deterministic Core + News Signal Enrichment
 
-The repository implements a mathematical, deterministic attention scoring model (`attentionService.ts`) that maps multi-dimensional delta observations into a single score bounded between `0` and `100`:
+The repository implements a **Hybrid Intelligence System** that cleanly separates deterministic decision logic from optional unstructured text analysis:
 
-$$\text{Attention Score} = \text{round}\Big((40 \times \text{PriceFactor}) + (25 \times \text{VolumeFactor}) + (20 \times \text{BenchmarkAlpha}) + (15 \times \text{CatalystCount})\Big)$$
+```text
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                      DETERMINISTIC WATCHLIST CORE (Zero Hallucinations)          │
+│                                                                                  │
+│   • Exact arithmetic delta detection (ΔP%, Volume Pace, Relative Alpha)          │
+│   • Bounded 4-factor scoring model [0 - 100]                                     │
+│   • Hard threshold priority classification (NEEDS_ATTENTION / WORTH_A_LOOK)      │
+│   • Deterministic string-interpolated reason generation                          │
+│   • Temporal freshness & session calendar evaluation                             │
+│   • PostgreSQL atomic checkpoint transactions                                    │
+└────────────────────────────────────────▲─────────────────────────────────────────┘
+                                         │
+                         Event Count (Integer: newEventCount)
+                                         │
+┌────────────────────────────────────────┴─────────────────────────────────────────┐
+│                      NEWS & CATALYST ENRICHMENT PIPELINE                         │
+│                                                                                  │
+│   Financial RSS Feeds (Economic Times, LiveMint, MoneyControl, Business Std)     │
+│                                        ↓                                         │
+│   Background News Worker (60s Polling Scheduler)                                 │
+│                                        ↓                                         │
+│   Multi-Provider LLM Enrichment (Groq openai-oss-120b / Gemini / OpenAI)        │
+│                                        OR                                        │
+│   Deterministic Offline NLP Fallback (Keyword Scanner + Sector Knowledge Graph)  │
+│                                        ↓                                         │
+│   PostgreSQL Event Table (Deduplicated via SHA-256 Hash)                         │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Factor Breakdown & Normalization Logic
-
-| Factor | Weight | Formula in Code | Description & Saturation Behavior |
-| :--- | :---: | :--- | :--- |
-| **Price Factor** | 40% | `min(1.0, |ΔP%| / 5.0)` | Normalized price change since the checkpoint. A 5.0% price swing reaches the maximum factor value of 1.0 (40 points). |
-| **Volume Factor** | 25% | `min(1.0, max(0, volumeRatio - 1.0) / 2.0)` | Volume pace ratio (`currentVolume / checkpointVolume`). Activates only when volume exceeds baseline pace (`volumeRatio > 1.0`); a 3.0x volume pace reaches 1.0 (25 points). Returns 0 if checkpoint baseline is unavailable. |
-| **Benchmark Alpha** | 20% | `min(1.0, |stockΔP% - NIFTY50ΔP%| / 4.0)` | Relative performance divergence against the NIFTY 50 index since the checkpoint. A 4.0% relative divergence reaches 1.0 (20 points). Handled gracefully as `null` if the benchmark quote is missing. |
-| **Catalyst Count** | 15% | `min(1.0, newEventCount / 2.0)` | Number of new corporate actions, earnings releases, or macro news events ingested since the checkpoint. ≥ 2 new events reach 1.0 (15 points). |
-
-### Significance Categorization Tiers
-
-Items are segmented into three priority tiers based on composite scores and boundary override conditions:
-
-1. **`NEEDS_ATTENTION`**:
-   - Condition: `attentionScore >= 60` **OR** `|ΔP%| >= 2.5%` **OR** `newEventCount >= 2`
-   - Purpose: Stocks experiencing major directional moves, sudden institutional volume surges, or critical corporate developments.
-2. **`WORTH_A_LOOK`**:
-   - Condition: `attentionScore >= 30` **OR** `|ΔP%| >= 1.0%`
-   - Purpose: Moderate price drifts or notable benchmark divergences that warrant secondary review.
-3. **`UNCHANGED`**:
-   - Condition: Does not meet `NEEDS_ATTENTION` or `WORTH_A_LOOK` criteria.
-   - Purpose: Normal market noise (e.g., fluctuations < 1.0% with steady volume), presented compactly without alert fatigue.
-
-### Factual Explanations & Alert Continuity
-- **Deterministic Reasons:** Every evaluated item receives structured, category-tagged reasons (`PRICE`, `VOLUME`, `BENCHMARK`, `CATALYST`) explaining why it ranked where it did (e.g., *"Price moved +4.50% since last check"*, *"Volume pace is 2.8× since checkpoint"*, *"Outperformed NIFTY 50 by +3.50%"*).
-- **Event Continuity Key (`computeEventContinuityKey`):** A stable signature hashing the symbol, significance tier, rounded price bucket, and event count. Minor incremental price ticks (e.g. +2.80% to +2.82%) do not trigger false alert state changes or re-render churn.
+> **Important Distinction:**
+> - The core watchlist is **not** an LLM wrapper. LLMs do not calculate scores, do not rank stocks, do not generate financial recommendations, and do not author the watchlist explanations.
+> - **AI enriches the incoming event/news signal; deterministic domain logic makes the watchlist decision.**
 
 ---
 
-## Persistence & Checkpoints
+## What Counts as a "Meaningful Change"?
 
-Checkpoints persist user state across browser sessions and devices using PostgreSQL via Prisma (`snapshotService.ts`):
+A conventional watchlist treats every sub-tick price jitter as equal. Smart Market Watchlist uses multi-layered noise suppression and explicit significance thresholds to separate actionable events from routine volatility:
 
-- **First Visit Baseline:** When a user accesses the watchlist for the first time without an existing checkpoint record, the system snapshots current prices and volumes, creates an initial baseline, and returns `isFirstVisit: true`. All items display initial baseline prices with `0.00%` delta and `UNCHANGED` status to prevent false notifications.
-- **Subsequent Return Visits:** On return visits, the backend loads the user's stored checkpoint from the `WatchlistCheckpoint` and `WatchlistCheckpointItem` tables, computes the delta between current market quotes and checkpoint values, and calculates the elapsed duration (e.g., *"2h 17m ago"*).
-- **"Mark All as Checked":** Triggered via `POST /watchlist/checkpoint`. The backend executes an atomic Prisma transaction that updates `WatchlistCheckpoint.lastCheckedAt` to `now()` and replaces previous `WatchlistCheckpointItem` records with latest observed market prices and volumes.
-- **Strict User Isolation:** Checkpoints are scoped directly to the authenticated user ID (`userId` decoded from verified JWT credentials). One user's actions or demo executions never leak to or mutate another user's baseline.
+1. **Noise Suppression Threshold:** Price movements under $1.00\%$ without abnormal volume or corporate catalysts remain firmly categorized as ⚪ **`UNCHANGED`** with a low attention score.
+2. **Direct Price Swing Override:** An absolute price swing $\ge 2.50\%$ since the checkpoint automatically promotes an instrument directly to 🔴 **`NEEDS_ATTENTION`**, regardless of other factors. Movements $\ge 1.00\%$ promote to 🟡 **`WORTH_A_LOOK`**.
+3. **Volume Anomaly Gating:** Volume pace is evaluated as a ratio against the checkpoint baseline ($\frac{\text{Current Volume}}{\text{Checkpoint Volume}}$). Pace must exceed $1.0\times$ before contributing any points to attention scoring.
+4. **Benchmark-Relative Alpha:** Movements are evaluated against the NIFTY 50 index over the same elapsed duration. A stock that rises $+1.5\%$ while NIFTY drops $-1.0\%$ exhibits $+2.5\%$ alpha divergence, earning higher attention than a stock moving in tandem with the broad market.
+5. **Event Continuity Keying (`computeEventContinuityKey`):** A stable signature hashing `${symbol}:${significance}:${bucketedPrice}:${newEventCount}` (with price rounded to $0.5\%$ buckets). Minor continuous tick flutter does not generate false alerts or re-render churn.
+
+---
+
+## Mathematical Determinism & Core Concepts
+
+A critical engineering requirement of Smart Market Watchlist is **100% mathematical reproducibility**. Given identical market inputs and the same historical checkpoint, the system must evaluate and categorize an instrument identically every single time — with zero stochastic drift, zero temperature variation, and zero hallucination.
+
+### The 4 Core Principles of Deterministic Design
+
+1. **Temporal Immutability ($T_0 \rightarrow T_1$):**
+   A user checkpoint is an immutable database record frozen at timestamp $T_0$. Deltas are calculated as a pure functional projection from the current market tick state ($T_1$) relative to $T_0$.
+2. **Bounded Normalized Factor Spaces ($f \in [0.0, 1.0]$):**
+   Each market dimension is scaled into a bounded, unitless range $[0.0, 1.0]$ with explicit saturation ceilings. This prevents extreme outliers (e.g. an illiquid stock with a $10\times$ volume spike) from distorting the composite score beyond its designated weight.
+3. **Discrete Quantization & Noise Hysteresis:**
+   Continuous price data is filtered through two deterministic gates:
+   - **Noise Gate ($< 1.00\%$):** Fluctuations under $1.00\%$ are held in `UNCHANGED` unless supported by volume anomalies or corporate events.
+   - **Continuity Binning ($0.5\%$ Buckets):** The alert signature hashes price changes into $0.5\%$ discrete intervals: $\text{bucket} = \frac{\text{round}(\Delta P\% \times 2)}{2}$. Minor sub-tick flutter ($+2.81\% \rightarrow +2.83\%$) produces an identical key, preventing UI re-render thrashing.
+4. **Graceful Degradation for Incomplete Data:**
+   The math never assumes false activity when data is missing:
+   - If checkpoint volume was 0 or unrecorded, $V_{\text{ratio}} = \text{null}$, the volume factor evaluates strictly to $0.0$, and the UI outputs an explicit *"Baseline unavailable"* badge.
+   - If benchmark index data is unavailable, alpha divergence evaluates to `null` and $0.0$ points without assuming outperformance or underperformance.
+
+---
+
+## Complete Mathematical Formulation
+
+The entire change detection and scoring pipeline is governed by the following equations implemented in [`attentionService.ts`](backend/src/services/watchlist/attentionService.ts) and [`changeDetectionService.ts`](backend/src/services/watchlist/changeDetectionService.ts):
+
+### 1. Dimension Delta Calculations
+
+$$\Delta P\% = \left(\frac{P_{\text{now}} - P_{\text{checkpoint}}}{P_{\text{checkpoint}}}\right) \times 100$$
+
+$$V_{\text{ratio}} = \begin{cases} \frac{V_{\text{now}}}{V_{\text{checkpoint}}} & \text{if } V_{\text{checkpoint}} > 0 \land V_{\text{now}} > 0 \\ \text{null} & \text{otherwise} \end{cases}$$
+
+$$\alpha = \begin{cases} \Delta P\%_{\text{stock}} - \Delta P\%_{\text{NIFTY50}} & \text{if NIFTY 50 quote is available} \\ \text{null} & \text{otherwise} \end{cases}$$
+
+$$C = \sum_{e \in \text{Events}} \mathbf{1}_{\big[\text{symbol} \in e.\text{primarySymbols} \;\land\; e.\text{ingestedAt} \ge T_{\text{checkpoint}}\big]}$$
+
+### 2. Factor Normalization Functions ($f \in [0.0, 1.0]$)
+
+- **Normalized Price Factor ($40\%$ weight):**
+  $$f_{\text{price}} = \min\left(1.0, \frac{|\Delta P\%|}{5.0}\right)$$
+  *(Saturates at a $5.0\%$ price move)*
+
+- **Normalized Volume Factor ($25\%$ weight):**
+  $$f_{\text{volume}} = \begin{cases} \min\left(1.0, \frac{V_{\text{ratio}} - 1.0}{2.0}\right) & \text{if } V_{\text{ratio}} > 1.0 \\ 0.0 & \text{otherwise} \end{cases}$$
+  *(Saturates at $3.0\times$ baseline pace; inactive if volume pace $\le 1.0\times$)*
+
+- **Normalized Benchmark Alpha Factor ($20\%$ weight):**
+  $$f_{\text{benchmark}} = \begin{cases} \min\left(1.0, \frac{|\alpha|}{4.0}\right) & \text{if } \alpha \neq \text{null} \\ 0.0 & \text{otherwise} \end{cases}$$
+  *(Saturates at a $4.0\%$ relative divergence against NIFTY 50)*
+
+- **Normalized Catalyst Factor ($15\%$ weight):**
+  $$f_{\text{catalyst}} = \min\left(1.0, \frac{\max(0, C)}{2.0}\right)$$
+  *(Saturates at $\ge 2$ new corporate or macro events)*
+
+### 3. Composite Attention Score
+
+$$\text{RawScore} = \Big(40 \times f_{\text{price}}\Big) + \Big(25 \times f_{\text{volume}}\Big) + \Big(20 \times f_{\text{benchmark}}\Big) + \Big(15 \times f_{\text{catalyst}}\Big)$$
+
+$$\text{Attention Score} = \max\Big(0, \min\big(100, \text{round}(\text{RawScore})\big)\Big)$$
+
+### 4. Priority Triage Function $\mathcal{T}$
+
+The instrument is partitioned into one of three discrete sets via explicit boundary rules:
+
+$$\mathcal{T}(\text{Score}, |\Delta P\%|, C) = \begin{cases}
+\mathbf{NEEDS\_ATTENTION} & \text{if } \text{Score} \ge 60 \lor |\Delta P\%| \ge 2.5\% \lor C \ge 2 \\
+\mathbf{WORTH\_A\_LOOK} & \text{else if } \text{Score} \ge 30 \lor |\Delta P\%| \ge 1.0\% \\
+\mathbf{UNCHANGED} & \text{otherwise}
+\end{cases}$$
+
+### 5. Event Continuity Signature
+
+$$\text{ContinuityKey} = \text{Symbol} : \mathcal{T} : \left(\frac{\lfloor 2 \cdot \Delta P\% + 0.5 \rfloor}{2}\right) : C$$
+
+### 6. Temporal Freshness Evaluation Function
+
+Given current wall-clock epoch $T_{\text{now}}$ and latest quote observation $T_{\text{quote}}$:
+
+$$\text{AgeSeconds} = \max\left(0, \left\lfloor \frac{T_{\text{now}} - T_{\text{quote}}}{1000} \right\rfloor\right)$$
+
+$$\text{FreshnessState} = \begin{cases}
+\mathbf{MARKET\_CLOSED} & \text{if } \neg\text{Session.isOpen} \\
+\mathbf{DATA\_UNAVAILABLE} & \text{else if } T_{\text{quote}} \le 0 \lor \text{feedCount} = 0 \\
+\mathbf{LIVE} & \text{else if } \text{AgeSeconds} \le 5 \\
+\mathbf{DELAYED} & \text{else if } \text{AgeSeconds} \le 30 \\
+\mathbf{STALE} & \text{otherwise (AgeSeconds } > 30\text{)}
+\end{cases}$$
+
+$$\text{canEvaluateConfidently} = \begin{cases} \text{true} & \text{if FreshnessState} \in \{\text{LIVE}, \text{DELAYED}, \text{MARKET\_CLOSED}\} \\ \text{false} & \text{if FreshnessState} \in \{\text{STALE}, \text{DATA\_UNAVAILABLE}\} \end{cases}$$
+
+---
+
+## Attention Scoring Model
+
+The scoring engine ([`attentionService.ts`](backend/src/services/watchlist/attentionService.ts)) implements an explicit, hand-engineered mathematical weighting formula. It is **not** a black-box or machine-learning model:
+
+$$\text{Attention Score} = \text{round}\Big((40 \times \text{PriceFactor}) + (25 \times \text{VolumeFactor}) + (20 \times \text{BenchmarkAlpha}) + (15 \times \text{CatalystCount})\Big)$$
+
+The composite score is strictly clamped to an integer between `0` and `100`.
+
+### Factor Breakdown & Clamping Logic
+
+| Factor | Weight | Formula in Code | Normalization & Saturation Behavior |
+| :--- | :---: | :--- | :--- |
+| **Price Factor** | 40% | `min(1.0, \|ΔP%\| / 5.0)` | Percentage change since checkpoint. A $5.0\%$ price move reaches maximum saturation of $1.0$ (40 points). |
+| **Volume Factor** | 25% | `min(1.0, max(0, volumeRatio - 1.0) / 2.0)` | Volume pace ratio vs. checkpoint. Only activates when `volumeRatio > 1.0`. A $3.0\times$ pace reaches $1.0$ (25 points). Returns 0 if volume baseline is unavailable. |
+| **Benchmark Alpha** | 20% | `min(1.0, \|stockΔP% - NIFTY50ΔP%\| / 4.0)` | Absolute divergence against NIFTY 50 since checkpoint. A $4.0\%$ divergence reaches $1.0$ (20 points). Evaluates to `null`/0 if index is unavailable. |
+| **Catalyst Count** | 15% | `min(1.0, newEventCount / 2.0)` | Count of new corporate actions, earnings releases, or macro news events since checkpoint. $\ge 2$ new events reach $1.0$ (15 points). |
+
+### Priority Classification Tiers
+
+- 🔴 **`NEEDS_ATTENTION`**:
+  - `attentionScore >= 60` **OR** `|ΔP%| >= 2.5%` **OR** `newEventCount >= 2`
+  - High-beta breakouts, major drops, severe volume spikes, or fresh corporate catalysts.
+- 🟡 **`WORTH_A_LOOK`**:
+  - `attentionScore >= 30` **OR** `|ΔP%| >= 1.0%`
+  - Moderate trend shifts, steady accumulation, or notable benchmark divergence.
+- ⚪ **`UNCHANGED`**:
+  - Does not satisfy the above thresholds.
+  - Quiet trading noise, displayed compactly without visual alarm.
+
+---
+
+## Checkpoints & Persistence
+
+Checkpoints persist user state across browser sessions and devices using PostgreSQL via Prisma ([`snapshotService.ts`](backend/src/services/watchlist/snapshotService.ts)):
+
+- **First Visit Baseline:** If a user accesses the watchlist for the first time with no stored checkpoint, the system snapshots current market prices and volumes, writes an initial checkpoint, and returns `isFirstVisit: true`. All items display baseline spot prices with `0.00%` delta and `UNCHANGED` status to eliminate phantom alerts.
+- **Subsequent Return Visits:** On return visits, the backend loads the user's stored checkpoint from the `WatchlistCheckpoint` and `WatchlistCheckpointItem` tables, calculates the elapsed duration (e.g. *"2h 17m ago"*), and computes deltas against current market quotes.
+- **"Mark Checkpoint" Action (`POST /watchlist/checkpoint`):** Acknowledges the current state. An atomic Prisma transaction updates `lastCheckedAt` to `now()` and replaces all checkpoint items with current prices and volumes.
+- **User Isolation:** All checkpoints are scoped to the authenticated user ID (`userId` verified via JWT). Checkpoint mutations by one user never affect another.
 
 ---
 
 ## Market Freshness & Data Quality
 
-The freshness engine (`freshnessService.ts`) continuously monitors data timestamps and exchange session state:
+The freshness evaluator ([`freshnessService.ts`](backend/src/services/watchlist/freshnessService.ts)) monitors feed latency against Indian market trading hours:
 
-| State | Condition | Evaluator Confidence | Behavior |
+| State | Session & Timing | Confidence | Meaning |
 | :--- | :--- | :---: | :--- |
-| **`LIVE`** | Active session (09:15–15:30 IST), quote age ≤ 5s | Confident (`true`) | Real-time streaming ticks active. |
-| **`DELAYED`** | Active session, quote age between 5s and 30s | Confident (`true`) | Minor feed latency detected. |
-| **`STALE`** | Active session, quote age > 30s | Degraded (`false`) | Stream dropped or interrupted during live trading hours; warning displayed. |
-| **`MARKET_CLOSED`** | Outside NSE trading hours or weekend | Confident (`true`) | Official exchange closing prices; fully trustworthy for delta analysis. |
-| **`DATA_UNAVAILABLE`**| Active session, but zero ticker feeds discoverable | Degraded (`false`) | Feed disconnected; evaluation suspended. |
+| **`LIVE`** | Regular trading session (09:15–15:30 IST), quote age $\le 5$s | Confident (`true`) | Real-time market ticks streaming normally. |
+| **`DELAYED`** | Regular trading session, quote age between $5$s and $30$s | Confident (`true`) | Minor feed latency detected; ticks still flowing. |
+| **`STALE`** | Regular trading session, quote age $> 30$s | Degraded (`false`) | Stream dropped or frozen during active market hours; warning displayed. |
+| **`MARKET_CLOSED`** | Outside NSE trading hours or weekend | Confident (`true`) | Official exchange closing prices; fully valid for delta comparison. |
+| **`DATA_UNAVAILABLE`**| Regular trading session, zero ticker feeds connected | Degraded (`false`) | No market feed discoverable; delta evaluation suspended. |
 
-### Critical Architectural Principle: `MARKET_CLOSED != STALE`
-A closed exchange session is **not** stale data. On weekends or after trading hours (15:30 IST), closing prices remain static and fully valid. The system evaluates `MARKET_CLOSED` with high confidence (`canEvaluateConfidently: true`). Conversely, market-open status alone does not guarantee a live feed: if exchange hours are active but quotes stop arriving, the engine detects the gap and flags the feed as `STALE`.
+### The Invariance Principle: `MARKET_CLOSED != STALE`
+A closed market is **not** stale data. On weekends or after 15:30 IST, closing prices are settled, official exchange records. They are fully trustworthy and evaluated with high confidence (`canEvaluateConfidently: true`). Conversely, market-open status alone does not guarantee a live feed: if trading hours are active but quotes stop arriving, the engine flags the feed as `STALE`.
 
 ---
 
 ## Market Data Architecture
 
-The application implements a dual-source market data architecture that normalizes quotes before they reach watchlist intelligence services:
+The application implements a dual-source market data architecture that decouples watchlist intelligence from external broker dependencies:
 
 ```text
 Real Zerodha Kite Ticker (WebSocket) ──┐
-                                       ├──► In-Memory State: ltpMap ──► Watchlist Core Services
+                                       ├──► In-Memory State: ltpMap ──► Watchlist Core Engine
 High-Fidelity Mock Stream (Default) ──┘    (Price, Volume, Timestamp)
 ```
 
-1. **In-Memory LTP Map (`portfolioService.ts`):** Serves as the normalized internal single source of truth for instrument quotes. Watchlist services consume this map directly without coupling to any specific broker library.
-2. **High-Fidelity Mock Stream (`kiteMockStream.ts`):** The default operational mode (`MARKET_DATA_MODE=mock`). Starts automatically on boot, generating realistic price ticks, accumulated volumes, and random walks across Indian equities. Evaluators can clone and run the full stack immediately without Zerodha Kite credentials or exchange subscriptions.
-3. **Real Zerodha Kite Connect (`kiteService.ts`, `streamHandler.ts`):** Available when configured (`MARKET_DATA_MODE=kite`). Authenticates via Kite Connect API, opens a live binary WebSocket feed, and streams live NSE/BSE ticks into `ltpMap`.
+1. **In-Memory LTP Map ([`portfolioService.ts`](backend/src/services/portfolioService.ts)):** An internal single source of truth storing `{ price, volume, timestamp, source }` per symbol. Watchlist services consume this map directly.
+2. **High-Fidelity Mock Stream ([`kiteMockStream.ts`](backend/src/services/kiteMockStream.ts)):** The default operational mode (`MARKET_DATA_MODE=mock`). Starts automatically on boot, simulating price ticks, accumulated volumes, and random walks across Indian equities. Evaluators can clone and run immediately with zero broker credentials.
+3. **Real Zerodha Kite Connect ([`kiteService.ts`](backend/src/services/kiteService.ts), [`streamHandler.ts`](backend/src/services/streamHandler.ts)):** Connects when credentials are provided (`MARKET_DATA_MODE=kite`), streaming live binary WebSocket ticks into `ltpMap`.
 
 ---
 
-## Deterministic Evaluator Infrastructure
+## News & Event Ingestion Pipeline
 
-To enable reproducible end-to-end evaluation without relying on exchange operating hours or live volatility, the repository includes a scenario controller (`scenarioController.ts`, `demoScenarioService.ts`):
-
-| Scenario | Simulated Market State | What It Demonstrates |
-| :--- | :--- | :--- |
-| **1. Baseline** | Standard calm trading day. Current prices and volumes match checkpoint values. | Verifies calm market behavior: all symbols categorized as `UNCHANGED`, zero false alerts. |
-| **2. Big Move** | Major price divergences. In the Evaluator Demo fixture: `RELIANCE` rallies +4.50% (Score 84, 2.8× volume pace, +3.50% alpha, 1 catalyst) into `NEEDS_ATTENTION`; `TCS` dips -1.70% into `WORTH_A_LOOK`. (In live stream injection: `TATAMOTORS` rallies +4.59%, `INFY` plunges -2.96%). | Verifies multi-factor scoring and direct promotion into `NEEDS_ATTENTION`. |
-| **3. Volume Spike** | Institutional accumulation surge: `RELIANCE` volume spikes to 2.90x, `TCS` surges to 2.82x normal pace. | Verifies volume ratio scoring and volume-driven rank promotion without massive price swings. |
-| **4. Stale Feed** | Active trading session with market feed suspended for > 60 seconds. | Verifies freshness degradation: flags `STALE` status and marks confidence as degraded. |
-| **5. Market Closed** | Trading session set to `CLOSED`, showing official closing prices. | Proves `MARKET_CLOSED != STALE`: status displays `MARKET_CLOSED` with high confidence. |
-| **6. Unchanged** | Quiet market session with sub-0.05% price movements. | Verifies threshold gating: micro-movements stay filtered under `UNCHANGED`. |
-
-*Note: Evaluator scenarios are isolated testing infrastructure and do not mutate real user database checkpoints.*
+1. **Scraping:** Background worker ([`newsWorker.ts`](backend/src/workers/newsWorker.ts)) polls major Indian financial RSS feeds (`Economic Times`, `LiveMint`, `MoneyControl`, `Business Standard`) on a 60-second schedule.
+2. **Enrichment:** Passes headline and summary to [`analyzeNewsAsync()`](backend/src/services/sentiment.ts):
+   - **LLM Call (When Configured):** Calls Groq (`openai-oss-120b`), Gemini (`gemini-3.8-flash`), or OpenAI (`gpt-5.6-luna-medium`) with a 5-second timeout, extracting `eventType`, `primarySymbols`, `sentimentScore`, and second-order `rippleImpacts`.
+   - **Offline Deterministic Fallback:** If API keys are absent or requests fail, executes [`analyzeNewsText()`](backend/src/services/sentiment.ts) using keyword dictionaries ([`SYMBOL_KEYWORDS`](backend/src/services/sentiment.ts)) and a hardcoded Indian market [`SECTOR_KNOWLEDGE_GRAPH`](backend/src/services/sentiment.ts).
+3. **Persistence:** Saves enriched records to the PostgreSQL `Event` table, deduplicated via SHA-256 hash (`source:externalId`).
+4. **Watchlist Link:** The watchlist snapshot service queries `countEventsForSymbol(symbol, checkpointDate)` to increment `newEventCount`.
 
 ---
 
@@ -140,12 +291,12 @@ To enable reproducible end-to-end evaluation without relying on exchange operati
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion["Market Data Layer"]
+    subgraph Market_Layer["Market Data Layer"]
         Kite["Zerodha Kite Connect<br/>(Live WebSocket)"] -.->|Optional| ltpMap
         Mock["Mock Market Stream<br/>(Default In-Memory Feed)"] --> ltpMap["In-Memory State: ltpMap<br/>(Price, Volume, Timestamp, Source)"]
     end
 
-    subgraph Core["Watchlist Intelligence Engine"]
+    subgraph Core_Engine["Deterministic Watchlist Core"]
         ltpMap --> CD["Change Detection Service<br/>(changeDetectionService.ts)"]
         DB[(PostgreSQL<br/>Watchlist Checkpoints)] <--> SS["Snapshot Service<br/>(snapshotService.ts)"]
         SS --> CD
@@ -155,12 +306,21 @@ flowchart TD
         FS --> Agg
     end
 
+    subgraph Event_Pipeline["News & Catalyst Intelligence (Auxiliary)"]
+        RSS["Financial RSS Feeds<br/>(ET, Mint, MoneyControl)"] --> NW["News Worker<br/>(newsWorker.ts)"]
+        NW --> AI["Enrichment Engine<br/>(sentiment.ts)"]
+        AI -.->|Optional API Keys| LLM["External LLMs<br/>(Groq / Gemini / OpenAI)"]
+        AI -->|Default Offline| NLP["Deterministic Fallback<br/>(Keywords + Sector Graph)"]
+        AI --> EvDB[(PostgreSQL<br/>Event Table)]
+        EvDB -->|countEventsForSymbol| SS
+    end
+
     subgraph Simulation["Evaluator Infrastructure"]
         SC["Scenario Controller<br/>(scenarioController.ts)"] -->|Inject Ticks & Session Overrides| ltpMap
         DS["Demo Scenario Service<br/>(demoScenarioService.ts)"] -->|Isolated In-Memory Fixtures| API
     end
 
-    subgraph Interface["Presentation Layer"]
+    subgraph Presentation["API & Frontend"]
         Agg --> API["Express API Router<br/>(/watchlist/*)"]
         API --> UI["Next.js 15 UI<br/>(App Router: /watchlist)"]
     end
@@ -170,15 +330,53 @@ flowchart TD
 
 ## Verified API Routes
 
-The following routes are implemented and verified in `backend/src/routes/watchlistChanges.ts`:
+All endpoints below are verified in [`backend/src/routes/watchlistChanges.ts`](backend/src/routes/watchlistChanges.ts):
 
-| Route | Method | Access | Description |
+| Route | Method | Access | Purpose |
 | :--- | :---: | :---: | :--- |
-| `/watchlist/summary` | `GET` | Authenticated | Returns the complete "What meaningfully changed while you were away" payload comparing current market state against the user's persisted checkpoint. |
-| `/watchlist/checkpoint` | `POST` | Authenticated | "Mark all as checked" action. Atomically snapshots current market prices and volumes to establish the user's new acknowledged baseline. |
-| `/watchlist/demo-scenario` | `POST`/`GET` | Public / Demo | Runs a parameterized, in-memory evaluator scenario (`?scenario=big_move`). Does not query or mutate PostgreSQL. |
-| `/watchlist/scenario/:name` | `POST` | Public / Demo | Injects simulated market conditions (`baseline`, `big_move`, `volume_spike`, `stale`, `market_closed`, `unchanged`) into `ltpMap` and updates session state. |
+| `/watchlist/summary` | `GET` | Authenticated | Returns the complete watchlist briefing comparing current market state against the user's stored checkpoint. |
+| `/watchlist/checkpoint` | `POST` | Authenticated | Acknowledges current market state and atomically snapshots new prices and volumes into PostgreSQL. |
+| `/watchlist/demo-scenario` | `POST`/`GET` | Public / Demo | Returns an in-memory, parameterizable evaluation fixture (`?scenario=big_move`) without touching database state. |
+| `/watchlist/scenario/:name` | `POST` | Public / Demo | Injects simulated market conditions (`baseline`, `big_move`, `volume_spike`, `stale`, `market_closed`, `unchanged`) into `ltpMap` and session state. |
 | `/watchlist/scenario` | `GET` | Public / Demo | Returns the currently active scenario name and the list of supported scenarios. |
+
+---
+
+## Deterministic Evaluator Infrastructure
+
+To enable reproducible evaluation outside exchange trading hours or during quiet markets, the repository includes six deterministic scenarios ([`scenarioController.ts`](backend/src/services/watchlist/scenarioController.ts), [`demoScenarioService.ts`](backend/src/services/watchlist/demoScenarioService.ts)):
+
+| Scenario | Simulated Market State | What It Demonstrates |
+| :--- | :--- | :--- |
+| **1. Baseline** | Calm market. Current prices and volumes match checkpoint values. | Verifies calm market behavior: all symbols categorized as `UNCHANGED`, zero false alerts. |
+| **2. Big Move** | Major price divergences. In Evaluator Demo: `RELIANCE` rallies $+4.50\%$ (Score 84, 2.8× volume pace, $+3.50\%$ alpha, 1 catalyst) into `NEEDS_ATTENTION`; `TCS` dips $-1.70\%$ into `WORTH_A_LOOK`. (In live stream: `TATAMOTORS` rallies $+4.59\%$, `INFY` drops $-2.96\%$). | Verifies multi-factor scoring and direct promotion into `NEEDS_ATTENTION`. |
+| **3. Volume Spike** | Institutional accumulation surge: `RELIANCE` volume spikes to $2.90\times$, `TCS` surges to $2.82\times$ normal pace. | Verifies volume ratio scoring and volume-driven rank promotion without massive price swings. |
+| **4. Stale Feed** | Active trading session with feed suspended for $> 60$ seconds. | Verifies freshness degradation: flags `STALE` status and marks confidence as degraded. |
+| **5. Market Closed** | Trading session set to `CLOSED`, displaying official closing prices. | Proves `MARKET_CLOSED != STALE`: status displays `MARKET_CLOSED` with high confidence. |
+| **6. Unchanged** | Quiet market session with sub-$0.05\%$ price movements. | Verifies threshold gating: micro-movements stay filtered under `UNCHANGED`. |
+
+*Note: Evaluator scenarios are isolated testing infrastructure and do not mutate real user database checkpoints.*
+
+---
+
+## Judge Demo Quickstart (< 2 Minutes)
+
+Evaluators can test the core workflow end-to-end using the built-in scenario runner:
+
+1. **Start the applications** using the Quickstart instructions below.
+2. **Open the Watchlist Briefing:** Navigate to `http://localhost:3000` (automatically redirects to `/watchlist`).
+3. **Establish Baseline:** Observe the initial calm market baseline.
+4. **Open Evaluator Demo:** Click the **`⚡ Evaluator Demo`** button in the top navigation bar.
+5. **Select "Big Move":** Choose the `Big Move (Relative Alpha)` card from the modal.
+6. **Run Scenario:** Click **`Run Scenario`**.
+7. **Return to Watchlist:** Notice the UI seamlessly transitions into the scenario briefing.
+8. **Inspect Ranked Changes:**
+   - In the Evaluator Demo view, observe **`RELIANCE`** promoted directly to **NEEDS ATTENTION** with an Attention Score of 84 (driven by $+4.50\%$ price change, 2.8× volume pace, $+3.50\%$ benchmark alpha, and a new catalyst).
+   - Notice **`TCS`** categorized under **WORTH A LOOK** ($-1.70\%$ shift, underperforming NIFTY 50 by $-2.70\%$).
+   - Expand the items to inspect the structured, deterministic reason badges.
+   *(Note: If running against an authenticated seeded database watchlist, `TATAMOTORS` at $+4.59\%$ and `INFY` at $-2.96\%$ will reflect the live feed divergence).*
+9. **Acknowledge Changes:** Click **`Mark Checkpoint`** (or press key <kbd>C</kbd>) to reset the baseline to current market prices.
+10. **Test Edge Cases:** Reopen the modal to test **`Stale Feed`** (inspect the degraded stream warning) or **`Market Closed`** (verify that closed markets remain confidently evaluable).
 
 ---
 
@@ -188,7 +386,13 @@ The following routes are implemented and verified in `backend/src/routes/watchli
 - **Node.js**: v20+
 - **PostgreSQL**: v16+ (running locally or via Docker)
 
-### 1. Backend Setup
+### 1. Database (Optional Docker Setup)
+
+```bash
+docker compose up -d
+```
+
+### 2. Backend Setup
 
 ```bash
 cd backend
@@ -201,7 +405,7 @@ npm run dev
 
 *By default, `.env` is configured with `MARKET_DATA_MODE=mock`. The backend starts immediately on `http://localhost:8000` with the high-fidelity mock stream active—zero broker API keys required.*
 
-### 2. Frontend Setup
+### 3. Frontend Setup
 
 ```bash
 cd frontend
@@ -214,33 +418,35 @@ The frontend will be accessible at `http://localhost:3000`.
 
 ---
 
-## Evaluator Demo Quickstart (< 2 Minutes)
+## Real Tech Stack
 
-Evaluators can test the core workflow end-to-end using the built-in scenario runner:
+- **Frontend:** Next.js 15 (App Router), React 19, Tailwind CSS
+- **Backend:** Node.js, Express 5, TypeScript 5.9
+- **Database & ORM:** PostgreSQL 16, Prisma 6.19 ORM
+- **Market Data:** In-memory `ltpMap` tick cache, `kiteconnect` 5.1 SDK (optional live mode), in-memory mock tick generator (default)
+- **Real-Time Streaming:** Socket.io 4.8
+- **Event Parsing:** Fast-XML-Parser 5.11 (RSS ingestion), Zod 4.1 (contract validation)
+- **Optional AI Callers:** Raw `fetch` endpoints for Groq, Gemini, and OpenAI; offline fallback regex/graph engine
 
-1. **Start the applications** using the Quickstart instructions above.
-2. **Open the Watchlist Briefing:** Navigate to `http://localhost:3000/watchlist`.
-3. **Establish Baseline:** The initial view displays the calm market baseline.
-4. **Open Evaluator Demo:** Click the **"Evaluator Demo"** button in the header toolbar.
-5. **Select "Big Move":** Choose the `Big Move` scenario from the modal.
-6. **Run Scenario:** Click **"Run Scenario"**.
-7. **Return to Watchlist:** Notice the UI seamlessly transitions into the scenario briefing.
-8. **Inspect Ranked Changes:**
-   - In the Evaluator Demo view, observe **`RELIANCE`** promoted directly to **NEEDS ATTENTION** with an Attention Score of 84 (driven by +4.50% price change, 2.8× volume pace, +3.50% benchmark alpha, and a new catalyst).
-   - Notice **`TCS`** categorized under **WORTH A LOOK** (-1.70% shift, underperforming NIFTY 50 by -2.70%).
-   - Expand the items to inspect the structured, deterministic reason badges.
-   *(Note: If running against an authenticated seeded database watchlist, `TATAMOTORS` at +4.59% and `INFY` at -2.96% will reflect the live feed divergence).*
-9. **Acknowledge Changes:** Click **"Mark all as checked"** to reset the checkpoint baseline to current market prices.
-10. **Test Edge Cases:** Reopen the modal to test **"Stale Feed"** (inspect the degraded stream warning) or **"Market Closed"** (verify that closed markets remain confidently evaluable).
+---
+
+## Scalability & Design Trade-offs
+
+The problem statement asks how the system scales and where simplicity was chosen:
+
+1. **In-Memory LTP Map for O(1) Ticks:** Quotes are stored in an in-memory map (`ltpMap`). Ticks update in $O(1)$ time and avoid hammering the database on high-frequency streaming ticks.
+2. **Stateful Checkpoint Storage in PostgreSQL:** Checkpoints are persisted in PostgreSQL with atomic transactions. While Redis could provide lower latency for high-concurrency writes, PostgreSQL with composite indexes (`[userId, symbol]`) provides ACID safety and simplified infrastructure for the 72-hour challenge.
+3. **Decoupled Architecture:** Ingestion, checkpoint persistence, delta detection, attention scoring, freshness evaluation, and presentation are separated into discrete, testable modules.
+4. **Current Limitations & Honest Trade-offs:**
+   - The in-memory `ltpMap` resides in a single Node.js process. In a distributed multi-instance deployment, this would be replaced with Redis Streams or Kafka.
+   - The RSS news worker polls every 60 seconds. A high-throughput production environment would leverage a dedicated message queue.
 
 ---
 
 ## Testing & Verification Matrix
 
-The repository has been verified across unit, integration, and browser end-to-end suites:
-
 - **Backend Test Suite:** **59 passing tests** (0 failures, executed via `node --test dist/tests/*.test.js`).
-  - Covers mathematical attention score clamping, boundary thresholds (0.99% vs 1.00% vs 2.50%), volume pace ratios, benchmark alpha divergence, event continuity keys, freshness transitions, scenario injection, and authentication boundaries.
+  - Covers mathematical attention score clamping, boundary thresholds ($0.99\%$ vs $1.00\%$ vs $2.50\%$), volume pace ratios, benchmark alpha divergence, event continuity keys, freshness transitions, scenario injection, and authentication boundaries.
 - **Frontend Production Build:** Compiles cleanly with zero type or lint errors (`next build`).
 - **End-to-End Browser Testing:** Verified using Playwright browser automation across all 6 scenarios, modal interactions, responsive mobile viewports, and live API network request tracking.
 

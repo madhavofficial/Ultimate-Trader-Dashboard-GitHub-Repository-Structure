@@ -41,6 +41,15 @@ export interface WatchlistChangeItem {
   visits?: CheckpointVisit[];
 }
 
+export interface ReplayCheckpointOption {
+  id: string;
+  label: string;
+  time: string;
+  timeSec: number;
+  isLive: boolean;
+  description?: string;
+}
+
 export interface WatchlistSummaryResponse {
   ok: boolean;
   userId: string;
@@ -68,4 +77,8 @@ export interface WatchlistSummaryResponse {
     unchanged: WatchlistChangeItem[];
   };
   demoActive?: boolean;
+  replayMode?: boolean;
+  activeBaseline?: ReplayCheckpointOption;
+  availableCheckpoints?: ReplayCheckpointOption[];
 }
+

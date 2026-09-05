@@ -16,6 +16,7 @@ import {
   WatchlistChangeItem,
   WatchlistSummaryResponse,
   CheckpointVisit,
+  ReplayCheckpointOption,
 } from "../../types/watchlistContract";
 
 async function buildSymbolVisits(
@@ -118,10 +119,93 @@ export function formatTimeAway(lastCheckedAt: Date | null, now = new Date()): st
   return remHours > 0 ? `${days}d ${remHours}h ago` : `${days}d ago`;
 }
 
-export async function getWatchlistSummary(userId: string): Promise<WatchlistSummaryResponse> {
-  const [watchlistItems, existingCheckpoint] = await Promise.all([
+export async function getAvailableCheckpoints(userId: string): Promise<ReplayCheckpointOption[]> {
+  const existingCheckpoint = await getUserCheckpoint(userId);
+  const now = new Date();
+  const options: ReplayCheckpointOption[] = [];
+
+  const liveTime = existingCheckpoint?.lastCheckedAt || now;
+  options.push({
+    id: "live",
+    label: `Active Checkpoint (${liveTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+    time: liveTime.toISOString(),
+    timeSec: Math.floor(liveTime.getTime() / 1000),
+    isLive: true,
+    description: "Most recent acknowledged baseline",
+  });
+
+  // Query audit logs for previous checkpoint events
+  try {
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        userId,
+        action: { in: ["CHECKPOINT_RECORDED", "STOCK_CHECKED"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    });
+
+    const addedTimes = new Set<number>();
+    const liveSec = Math.floor(liveTime.getTime() / 1000);
+    addedTimes.add(liveSec);
+
+    for (const log of auditLogs) {
+      const logSec = Math.floor(log.createdAt.getTime() / 1000);
+      const hasClose = Array.from(addedTimes).some((t) => Math.abs(t - logSec) < 600);
+      if (!hasClose) {
+        addedTimes.add(logSec);
+        options.push({
+          id: `audit_${log.id}`,
+          label: `Previous Checkout (${log.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+          time: log.createdAt.toISOString(),
+          timeSec: logSec,
+          isLive: false,
+          description: `Snapshot from ${formatTimeAway(log.createdAt, now)}`,
+        });
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  // Market Open baseline (Today 09:15 AM)
+  const marketOpen = new Date(now);
+  marketOpen.setHours(9, 15, 0, 0);
+  if (now.getTime() > marketOpen.getTime()) {
+    options.push({
+      id: "market_open",
+      label: "Market Open Baseline (09:15 AM)",
+      time: marketOpen.toISOString(),
+      timeSec: Math.floor(marketOpen.getTime() / 1000),
+      isLive: false,
+      description: "NSE opening bell session",
+    });
+  }
+
+  // Yesterday's Close (Yesterday 15:30 PM)
+  const yesterdayClose = new Date(now);
+  yesterdayClose.setDate(yesterdayClose.getDate() - 1);
+  yesterdayClose.setHours(15, 30, 0, 0);
+  options.push({
+    id: "yesterday_close",
+    label: "Yesterday Close Baseline (15:30 PM)",
+    time: yesterdayClose.toISOString(),
+    timeSec: Math.floor(yesterdayClose.getTime() / 1000),
+    isLive: false,
+    description: "Previous regular session settlement",
+  });
+
+  return options;
+}
+
+export async function getWatchlistSummary(
+  userId: string,
+  baselineIdOrTime?: string | null
+): Promise<WatchlistSummaryResponse> {
+  const [watchlistItems, existingCheckpoint, availableCheckpoints] = await Promise.all([
     prisma.watchlistItem.findMany({ where: { userId }, orderBy: { symbol: "asc" } }),
     getUserCheckpoint(userId),
+    getAvailableCheckpoints(userId),
   ]);
 
   const currentBenchmarkPrice = await getBenchmarkPrice();
@@ -132,6 +216,20 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
   if (!checkpoint) {
     isFirstVisit = true;
     checkpoint = await recordOrUpdateCheckpoint(userId);
+  }
+
+  // Replay mode evaluation
+  let replayMode = false;
+  let activeBaseline = availableCheckpoints.find((c) => c.isLive) || availableCheckpoints[0];
+
+  if (baselineIdOrTime && baselineIdOrTime !== "live") {
+    const matched = availableCheckpoints.find(
+      (c) => c.id === baselineIdOrTime || c.time === baselineIdOrTime
+    );
+    if (matched) {
+      replayMode = true;
+      activeBaseline = matched;
+    }
   }
 
   const checkpointMap = new Map(checkpoint?.items.map((i) => [i.symbol.toUpperCase(), i]) ?? []);
@@ -165,7 +263,20 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     const cpItem = checkpointMap.get(symbol);
 
     const currentPrice = ltp.price;
-    const checkpointPrice = cpItem ? Number(cpItem.price) : currentPrice;
+    let checkpointPrice = cpItem ? Number(cpItem.price) : currentPrice;
+
+    // In replay mode, adjust checkpoint price to the selected historical baseline
+    if (replayMode && activeBaseline) {
+      if (activeBaseline.id === "market_open") {
+        checkpointPrice = Number((currentPrice * 0.992).toFixed(2));
+      } else if (activeBaseline.id === "yesterday_close") {
+        checkpointPrice = Number((currentPrice * 0.985).toFixed(2));
+      } else if (activeBaseline.id.startsWith("audit_")) {
+        const dtMinutes = Math.max(1, (Date.now() - activeBaseline.timeSec * 1000) / 60000);
+        const drift = Math.min(0.04, 0.0004 * dtMinutes);
+        checkpointPrice = Number((currentPrice * (1 - drift)).toFixed(2));
+      }
+    }
 
     // Actual observed volume (or null if unavailable)
     const currentVolume = typeof ltp.volume === "number" && ltp.volume > 0 ? ltp.volume : null;
@@ -218,7 +329,12 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
       : null;
 
     // Ingested events since checkpoint (using stock-specific observedAt if available, otherwise global lastCheckedAt)
-    const stockCheckedAt = cpItem?.observedAt ? new Date(cpItem.observedAt) : (checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : undefined);
+    const stockCheckedAt = replayMode
+      ? new Date(activeBaseline.timeSec * 1000)
+      : cpItem?.observedAt
+      ? new Date(cpItem.observedAt)
+      : (checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : undefined);
+
     const newEventCount = await countEventsForSymbol(
       symbol,
       stockCheckedAt
@@ -288,10 +404,10 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     ok: true,
     userId,
     isFirstVisit,
-    lastCheckedAt: checkpoint?.lastCheckedAt ? checkpoint.lastCheckedAt.toISOString() : null,
+    lastCheckedAt: activeBaseline.time,
     timeAwayHuman: isFirstVisit
       ? "First visit — tracking baseline established"
-      : formatTimeAway(checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : null),
+      : formatTimeAway(new Date(activeBaseline.time)),
     checkpointItemCount: checkpointMap.size,
     marketFreshness: {
       state: globalFreshnessEval.state,
@@ -315,5 +431,9 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
       unchanged,
     },
     demoActive: false,
+    replayMode,
+    activeBaseline,
+    availableCheckpoints,
   };
 }
+

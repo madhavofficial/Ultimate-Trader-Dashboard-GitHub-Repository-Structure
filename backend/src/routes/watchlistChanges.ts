@@ -1,6 +1,6 @@
 import { Router, Response, NextFunction, Request } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
-import { getWatchlistSummary } from "../services/watchlist/changeDetectionService";
+import { getWatchlistSummary, getAvailableCheckpoints } from "../services/watchlist/changeDetectionService";
 import { recordOrUpdateCheckpoint, recordOrUpdateStockCheckpoint } from "../services/watchlist/snapshotService";
 import { getDemoScenarioSummary } from "../services/watchlist/demoScenarioService";
 
@@ -22,8 +22,22 @@ router.all("/demo-scenario", (_req: Request, res: Response) => {
 router.use(authMiddleware);
 
 /**
+ * GET /watchlist/checkpoints
+ * Returns list of available checkpoint anchors (Live checkpoint, past checkout sessions, market open, yesterday close)
+ */
+router.get("/checkpoints", async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const checkpoints = await getAvailableCheckpoints(req.user!.id);
+    return res.json({ ok: true, checkpoints });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
  * GET /watchlist/summary (and alias /watchlist/changes)
  * Returns complete "What meaningfully changed while you were away" payload for authenticated user
+ * Supports optional ?baseline=<id_or_time> for historical checkpoint replay
  */
 router.get(["/summary", "/changes"], async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -32,7 +46,8 @@ router.get(["/summary", "/changes"], async (req: AuthRequest, res: Response, nex
       return res.json(getDemoScenarioSummary(req.user!.id));
     }
 
-    const summary = await getWatchlistSummary(req.user!.id);
+    const baseline = (req.query.baseline as string) || (req.query.checkpointId as string) || null;
+    const summary = await getWatchlistSummary(req.user!.id, baseline);
     return res.json(summary);
   } catch (error) {
     return next(error);

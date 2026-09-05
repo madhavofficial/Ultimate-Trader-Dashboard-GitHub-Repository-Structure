@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { io, Socket } from "socket.io-client";
 import {
   WatchlistSummaryResponse,
   WatchlistChangeItem,
   MarketFreshnessState,
+  ReplayCheckpointOption,
 } from "../../types/watchlistContract";
 import InteractivePriceChart from "../../components/InteractivePriceChart";
 
@@ -25,6 +27,22 @@ export default function SmartMarketWatchPage() {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [selectedCategory, setSelectedCategory] = useState<"ALL" | "CATEGORY_A" | "CATEGORY_B" | "CATEGORY_C">("ALL");
 
+  // Feature 2: Historical Checkpoint Replay State
+  const [selectedBaselineId, setSelectedBaselineId] = useState<string>("active_checkpoint");
+  const [isBaselineDropdownOpen, setIsBaselineDropdownOpen] = useState(false);
+
+  // Feature 3: Live Kite / WebSocket Ticker State
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [brokerStatus, setBrokerStatus] = useState<{ connected: boolean; broker?: string } | null>(null);
+  const [liveTicksBySymbol, setLiveTicksBySymbol] = useState<Record<string, Array<{ time: number; price: number }>>>({});
+  const [tickFlashes, setTickFlashes] = useState<Record<string, "up" | "down">>({});
+
+  // Feature 4: Audio & Desktop Alert State
+  const [soundAlertsEnabled, setSoundAlertsEnabled] = useState(true);
+  const [desktopAlertsEnabled, setDesktopAlertsEnabled] = useState(false);
+  const [alertToasts, setAlertToasts] = useState<Array<{ id: string; symbol: string; title: string; message: string; timestamp: number }>>([]);
+  const prevCategoriesRef = useRef<Record<string, string>>({});
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -37,8 +55,108 @@ export default function SmartMarketWatchPage() {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  // Load live watchlist summary from backend (requires authenticated user)
-  const fetchRealSummary = useCallback(async () => {
+  // Play subtle dual chord Web Audio chime (D5: 587.33 Hz, A5: 880.00 Hz)
+  const playCategoryAChime = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      const gain2 = ctx.createGain();
+
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(587.33, now); // D5
+      gain1.gain.setValueAtTime(0.001, now);
+      gain1.gain.exponentialRampToValueAtTime(0.08, now + 0.04);
+      gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(880.00, now + 0.05); // A5
+      gain2.gain.setValueAtTime(0.001, now);
+      gain2.gain.exponentialRampToValueAtTime(0.06, now + 0.08);
+      gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+
+      osc1.start(now);
+      osc1.stop(now + 0.36);
+      osc2.start(now + 0.05);
+      osc2.stop(now + 0.39);
+    } catch (err) {
+      console.warn("Audio chime playback prevented or unsupported:", err);
+    }
+  }, []);
+
+  // Send native desktop notification
+  const sendDesktopAlert = useCallback((title: string, body: string) => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      try {
+        new Notification(title, {
+          body,
+          icon: "/favicon.ico",
+          tag: "watchlist-category-a",
+        });
+      } catch (err) {
+        console.warn("Desktop notification failed:", err);
+      }
+    }
+  }, []);
+
+  const toggleDesktopNotifications = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      alert("Desktop notifications are not supported in this browser.");
+      return;
+    }
+    if (Notification.permission === "granted") {
+      setDesktopAlertsEnabled((prev) => !prev);
+    } else if (Notification.permission !== "denied") {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        setDesktopAlertsEnabled(true);
+        sendDesktopAlert("Watchlist Alerts Active", "You will be alerted when a stock escalates to Category A: Needs Attention.");
+      }
+    } else {
+      alert("Notification permissions were previously denied. Please enable them in your browser settings.");
+    }
+  };
+
+  const triggerCategoryAAlert = useCallback((stock: WatchlistChangeItem, reason: string) => {
+    if (soundAlertsEnabled) {
+      playCategoryAChime();
+    }
+    if (desktopAlertsEnabled) {
+      sendDesktopAlert(
+        `⚠️ Watchlist Alert: ${stock.symbol}`,
+        `${stock.symbol} escalated to Category A (${stock.priceChangePct >= 0 ? "+" : ""}${stock.priceChangePct.toFixed(2)}%). ${reason}`
+      );
+    }
+    const toastId = `${stock.symbol}-${Date.now()}`;
+    setAlertToasts((prev) => [
+      {
+        id: toastId,
+        symbol: stock.symbol,
+        title: `${stock.symbol} Escalated to Category A`,
+        message: `${stock.priceChangePct >= 0 ? "+" : ""}${stock.priceChangePct.toFixed(2)}% vs baseline · ${reason}`,
+        timestamp: Date.now(),
+      },
+      ...prev.slice(0, 4),
+    ]);
+    setTimeout(() => {
+      setAlertToasts((prev) => prev.filter((t) => t.id !== toastId));
+    }, 7000);
+  }, [soundAlertsEnabled, desktopAlertsEnabled, playCategoryAChime, sendDesktopAlert]);
+
+  // Load live watchlist summary from backend with optional baseline override
+  const fetchRealSummary = useCallback(async (baselineOverride?: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -48,8 +166,13 @@ export default function SmartMarketWatchPage() {
         router.replace("/dashboard");
         return;
       }
+      const baseline = baselineOverride !== undefined ? baselineOverride : selectedBaselineId;
+      const summaryUrl = baseline && baseline !== "active_checkpoint"
+        ? `${API_URL}/watchlist/summary?baseline=${encodeURIComponent(baseline)}`
+        : `${API_URL}/watchlist/summary`;
+
       const [res, intelRes] = await Promise.all([
-        fetch(`${API_URL}/watchlist/summary`, {
+        fetch(summaryUrl, {
           headers: { Authorization: `Bearer ${token}` },
         }),
         fetch(`${API_URL}/intelligence/events`, {
@@ -67,6 +190,9 @@ export default function SmartMarketWatchPage() {
       }
       const json: WatchlistSummaryResponse = await res.json();
       setData(json);
+      if (json.activeBaseline?.id) {
+        setSelectedBaselineId(json.activeBaseline.id);
+      }
       if (intelRes && intelRes.ok) {
         try {
           const intelJson = await intelRes.json();
@@ -83,7 +209,126 @@ export default function SmartMarketWatchPage() {
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, [router, selectedBaselineId]);
+
+  // Check Kite broker connection status
+  useEffect(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+    if (!token) return;
+    fetch(`${API_URL}/broker/kite/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (res) setBrokerStatus(res);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Live Kite / Socket.io Ticker Connection
+  useEffect(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+    if (!token) return;
+
+    const socket: Socket = io(API_URL, {
+      auth: { token },
+      transports: ["websocket", "polling"],
+    });
+
+    socket.on("connect", () => {
+      setSocketConnected(true);
+    });
+
+    socket.on("disconnect", () => {
+      setSocketConnected(false);
+    });
+
+    const handleTicks = (ticks: any[]) => {
+      if (!Array.isArray(ticks) || ticks.length === 0) return;
+      const now = Date.now();
+
+      ticks.forEach((tick) => {
+        const sym = tick.symbol;
+        const price = Number(tick.last_price);
+        if (!sym || !price || isNaN(price)) return;
+
+        // Maintain continuous streaming tick buffer (last 120 ticks)
+        setLiveTicksBySymbol((prev) => {
+          const existing = prev[sym] || [];
+          const updated = [...existing, { time: now, price }].slice(-120);
+          return { ...prev, [sym]: updated };
+        });
+
+        // Trigger visual flash and live price update
+        setData((prevData) => {
+          if (!prevData) return prevData;
+
+          let hasUpdated = false;
+          const updateItem = (item: WatchlistChangeItem): WatchlistChangeItem => {
+            if (item.symbol !== sym) return item;
+            hasUpdated = true;
+            const prevPrice = item.currentPrice;
+            const flash = price >= prevPrice ? "up" : "down";
+            setTickFlashes((f) => ({ ...f, [sym]: flash }));
+            setTimeout(() => {
+              setTickFlashes((f) => {
+                const copy = { ...f };
+                delete copy[sym];
+                return copy;
+              });
+            }, 700);
+
+            const priceChangePct = item.checkpointPrice > 0 ? ((price - item.checkpointPrice) / item.checkpointPrice) * 100 : 0;
+            return {
+              ...item,
+              currentPrice: price,
+              priceChangePct,
+              benchmarkAlphaPct: item.benchmarkAlphaPct !== null ? item.benchmarkAlphaPct + (priceChangePct - item.priceChangePct) : null,
+            };
+          };
+
+          return {
+            ...prevData,
+            groups: {
+              needsAttention: prevData.groups.needsAttention.map(updateItem),
+              worthALook: prevData.groups.worthALook.map(updateItem),
+              unchanged: prevData.groups.unchanged.map(updateItem),
+            },
+          };
+        });
+      });
+    };
+
+    socket.on("tick", handleTicks);
+    socket.on("kite:tick", handleTicks);
+
+    return () => {
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.off("tick", handleTicks);
+      socket.off("kite:tick", handleTicks);
+      socket.disconnect();
+    };
+  }, []);
+
+  // Category A escalation detector
+  useEffect(() => {
+    if (!data) return;
+    const currentMap: Record<string, string> = {};
+    data.groups.needsAttention.forEach((s) => (currentMap[s.symbol] = "CATEGORY_A"));
+    data.groups.worthALook.forEach((s) => (currentMap[s.symbol] = "CATEGORY_B"));
+    data.groups.unchanged.forEach((s) => (currentMap[s.symbol] = "CATEGORY_C"));
+
+    data.groups.needsAttention.forEach((stock) => {
+      const prevCat = prevCategoriesRef.current[stock.symbol];
+      if (prevCat && prevCat !== "CATEGORY_A") {
+        const reason = stock.reasons[0]?.value || stock.summaryExplanation || "Material price or volume velocity";
+        triggerCategoryAAlert(stock, reason);
+      }
+    });
+
+    prevCategoriesRef.current = currentMap;
+  }, [data, triggerCategoryAAlert]);
 
   // CHECKPOINT: Acknowledge current spot prices and reset baseline
   const handleMarkAllAsChecked = useCallback(async () => {
@@ -106,8 +351,9 @@ export default function SmartMarketWatchPage() {
         throw new Error(`Failed to record checkpoint (${res.status})`);
       }
       setIsDrawerOpen(false);
+      setSelectedBaselineId("active_checkpoint");
       // Immediately refresh the real summary to observe zero delta "caught up" state
-      await fetchRealSummary();
+      await fetchRealSummary("active_checkpoint");
     } catch (err: any) {
       alert(`Error setting checkpoint: ${err.message}`);
     } finally {
@@ -338,21 +584,55 @@ export default function SmartMarketWatchPage() {
           <a
             aria-current="page"
             className="text-primary border-b-2 border-primary font-medium pb-3 text-body-md font-body-md cursor-pointer"
-            onClick={fetchRealSummary}
+            onClick={() => { fetchRealSummary(); }}
           >
             What Changed
           </a>
         </nav>
 
-        {/* Right Cluster: Live Feed Status + Actions */}
-        <div className="flex items-center space-x-3">
+        {/* Right Cluster: Live Feed Status + Alerts + Actions */}
+        <div className="flex items-center space-x-2.5">
+          {/* Audio Chime Alert Toggle */}
+          <button
+            type="button"
+            onClick={() => setSoundAlertsEnabled((prev) => !prev)}
+            className={`w-8 h-8 rounded-DEFAULT flex items-center justify-center border transition-all ${
+              soundAlertsEnabled
+                ? "bg-primary/15 border-primary/40 text-primary hover:bg-primary/25"
+                : "bg-surface-container border-outline-variant text-outline hover:text-on-surface"
+            }`}
+            title={soundAlertsEnabled ? "Audio Chime Alerts: ACTIVE (Plays on Category A escalation)" : "Audio Chime Alerts: MUTED"}
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {soundAlertsEnabled ? "volume_up" : "volume_off"}
+            </span>
+          </button>
+
+          {/* Desktop Notifications Toggle */}
+          <button
+            type="button"
+            onClick={toggleDesktopNotifications}
+            className={`w-8 h-8 rounded-DEFAULT flex items-center justify-center border transition-all ${
+              desktopAlertsEnabled
+                ? "bg-primary/15 border-primary/40 text-primary hover:bg-primary/25"
+                : "bg-surface-container border-outline-variant text-outline hover:text-on-surface"
+            }`}
+            title={desktopAlertsEnabled ? "Desktop Notifications: ACTIVE" : "Desktop Notifications: INACTIVE (Click to enable)"}
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {desktopAlertsEnabled ? "notifications_active" : "notifications_off"}
+            </span>
+          </button>
+
           {/* Live Market & Feed Status Pill (Side Updating) */}
           <div
             className="hidden sm:flex items-center space-x-2 bg-surface-container-lowest px-2.5 py-1 rounded-DEFAULT border border-outline-variant font-label-numeric-sm text-label-numeric-sm"
-            title={`NSE Market Feed: ${data?.marketFreshness.state || "LIVE"} · ${data?.marketFreshness.note || "Direct stream nominal"}`}
+            title={`Feed: ${socketConnected ? "Kite WebSocket Live (<1s)" : freshnessInfo.text} · ${data?.marketFreshness.note || "Direct stream nominal"}`}
           >
-            <span className={`w-2 h-2 rounded-full ${freshnessInfo.dotClass}`}></span>
-            <span className="text-on-surface font-medium">{freshnessInfo.text}</span>
+            <span className={`w-2 h-2 rounded-full ${socketConnected ? "bg-primary animate-pulse" : freshnessInfo.dotClass}`}></span>
+            <span className="text-on-surface font-medium">
+              {socketConnected ? (brokerStatus?.connected ? "Kite Live Feed" : "Live Stream (<1s)") : freshnessInfo.text}
+            </span>
             <span className="text-outline">|</span>
             <span className="text-on-surface-variant font-mono text-[11px]">
               {currentTime ? new Date(currentTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Active"}
@@ -376,7 +656,7 @@ export default function SmartMarketWatchPage() {
           {/* Quick Refresh */}
           <button
             className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
-            onClick={fetchRealSummary}
+            onClick={() => { fetchRealSummary(); }}
             title="Refresh Data"
           >
             <span className={`material-symbols-outlined ${loading ? "animate-spin" : ""}`}>
@@ -448,7 +728,7 @@ export default function SmartMarketWatchPage() {
               <span>{error}</span>
             </div>
             <button
-              onClick={fetchRealSummary}
+              onClick={() => { fetchRealSummary(); }}
               className="text-primary hover:underline font-label-numeric-sm text-label-numeric-sm"
             >
               Retry Connection →
@@ -499,8 +779,76 @@ export default function SmartMarketWatchPage() {
                   </div>
                 </div>
 
-                {/* Right: Checkpoint Action Button */}
+                {/* Right: Baseline Replay Selector & Checkpoint Action */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-shrink-0">
+                  {/* Baseline Replay Selector Dropdown */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsBaselineDropdownOpen((prev) => !prev)}
+                      className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-DEFAULT border text-label-numeric-sm font-medium transition-all ${
+                        data.replayMode
+                          ? "bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25"
+                          : "bg-surface-container border-outline-variant hover:border-primary/50 text-on-surface hover:bg-surface-container-high"
+                      }`}
+                      title="Select baseline snapshot to calculate deltas against"
+                    >
+                      <span className="material-symbols-outlined text-[17px] text-primary">history_toggle_off</span>
+                      <span className="text-on-surface-variant text-xs">Baseline:</span>
+                      <strong className="text-on-surface font-semibold max-w-[140px] sm:max-w-[180px] truncate">
+                        {data.activeBaseline?.label || "Active Checkpoint"}
+                      </strong>
+                      <span className="material-symbols-outlined text-[16px] text-outline">
+                        {isBaselineDropdownOpen ? "expand_less" : "expand_more"}
+                      </span>
+                    </button>
+                    {isBaselineDropdownOpen && (
+                      <div className="absolute right-0 mt-1.5 w-72 bg-surface-container-high border border-outline-variant rounded-DEFAULT shadow-2xl z-50 py-1 overflow-hidden">
+                        <div className="px-3 py-1.5 text-[11px] font-caption-caps text-outline uppercase tracking-wider border-b border-outline-variant flex items-center justify-between">
+                          <span>Checkpoint Replay</span>
+                          <span className="text-[10px] text-primary font-bold">TIME MACHINE</span>
+                        </div>
+                        <div className="max-h-60 overflow-y-auto divide-y divide-outline-variant/40">
+                          {data.availableCheckpoints && data.availableCheckpoints.length > 0 ? (
+                            data.availableCheckpoints.map((chk) => {
+                              const isSelected = data.activeBaseline?.id === chk.id || (!data.activeBaseline && chk.isLive);
+                              return (
+                                <button
+                                  key={chk.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setIsBaselineDropdownOpen(false);
+                                    setSelectedBaselineId(chk.id);
+                                    fetchRealSummary(chk.id);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-label-numeric-sm flex flex-col transition-colors ${
+                                    isSelected
+                                      ? "bg-primary/20 text-primary font-bold border-l-2 border-primary"
+                                      : "text-on-surface hover:bg-surface-variant"
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-semibold text-body-sm">{chk.label}</span>
+                                    {chk.isLive && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary uppercase font-bold">
+                                        Active
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-outline-variant font-mono mt-0.5">
+                                    {chk.time ? new Date(chk.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : chk.label}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <div className="px-3 py-2 text-outline text-xs">No historical checkpoints found</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <button
                     disabled={actionPending}
                     className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-primary text-on-primary font-semibold rounded-DEFAULT hover:bg-primary-fixed shadow-md active:scale-95 transition-all text-body-md group disabled:opacity-50"
@@ -601,6 +949,42 @@ export default function SmartMarketWatchPage() {
                 </div>
               </div>
             </section>
+
+            {/* TIME MACHINE REPLAY MODE BANNER */}
+            {data.replayMode && data.activeBaseline && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-DEFAULT p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                <div className="flex items-center space-x-3">
+                  <div className="w-9 h-9 rounded-DEFAULT bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold flex-shrink-0">
+                    <span className="material-symbols-outlined text-[22px]">history</span>
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-amber-400 text-label-numeric-sm uppercase tracking-wider">
+                        Time Machine Replay Mode Active
+                      </span>
+                      <span className="text-outline text-xs">•</span>
+                      <span className="text-on-surface font-semibold text-body-sm">
+                        Baseline: {data.activeBaseline.label}
+                      </span>
+                    </div>
+                    <p className="text-on-surface-variant text-body-sm mt-0.5">
+                      Recalculating price deltas, volume pace, and alpha against historical snapshot ({data.activeBaseline.time ? new Date(data.activeBaseline.time).toLocaleString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric" }) : "historical anchor"}). Real-time prices are compared to this moment.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedBaselineId("active_checkpoint");
+                    fetchRealSummary("active_checkpoint");
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-DEFAULT text-label-numeric-sm font-semibold transition-all whitespace-nowrap active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                  <span>Reset to Active Checkpoint</span>
+                </button>
+              </div>
+            )}
 
             {/* FIRST VISIT STATE (If user has never established a checkpoint) */}
             {data.isFirstVisit && (
@@ -751,10 +1135,12 @@ export default function SmartMarketWatchPage() {
                         {data.groups.needsAttention.map((stock) => {
                           const isPositive = stock.priceChangePct >= 0;
                           const deltaAmount = stock.currentPrice - stock.checkpointPrice;
+                          const flash = tickFlashes[stock.symbol];
+                          const flashClass = flash === "up" ? "ring-2 ring-primary/80 bg-primary/5 transition-all duration-300" : flash === "down" ? "ring-2 ring-secondary/80 bg-secondary/5 transition-all duration-300" : "";
                           return (
                             <article
                               key={stock.symbol}
-                              className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group overflow-hidden"
+                              className={`bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group overflow-hidden ${flashClass}`}
                               onClick={() => openDrawer(stock.symbol)}
                             >
                               <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
@@ -880,10 +1266,12 @@ export default function SmartMarketWatchPage() {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {data.groups.worthALook.map((stock) => {
                           const isPositive = stock.priceChangePct >= 0;
+                          const flash = tickFlashes[stock.symbol];
+                          const flashClass = flash === "up" ? "ring-2 ring-primary/80 bg-primary/5 transition-all duration-300" : flash === "down" ? "ring-2 ring-secondary/80 bg-secondary/5 transition-all duration-300" : "";
                           return (
                             <div
                               key={stock.symbol}
-                              className="bg-surface-container border border-outline-variant hover:border-outline rounded-DEFAULT p-4 transition-colors cursor-pointer"
+                              className={`bg-surface-container border border-outline-variant hover:border-outline rounded-DEFAULT p-4 transition-colors cursor-pointer ${flashClass}`}
                               onClick={() => openDrawer(stock.symbol)}
                             >
                               <div className="flex items-start justify-between">
@@ -960,10 +1348,12 @@ export default function SmartMarketWatchPage() {
                         {data.groups.unchanged.map((stock) => {
                           const isPositive = stock.priceChangePct > 0;
                           const isNegative = stock.priceChangePct < 0;
+                          const flash = tickFlashes[stock.symbol];
+                          const flashClass = flash === "up" ? "ring-1 ring-primary/80 bg-primary/10 transition-all duration-300" : flash === "down" ? "ring-1 ring-secondary/80 bg-secondary/10 transition-all duration-300" : "";
                           return (
                             <div
                               key={stock.symbol}
-                              className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col cursor-pointer hover:border-outline"
+                              className={`bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col cursor-pointer hover:border-outline ${flashClass}`}
                               onClick={() => openDrawer(stock.symbol)}
                             >
                               <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">
@@ -1087,6 +1477,7 @@ export default function SmartMarketWatchPage() {
                   checkpointTime={selectedStock.observedAt || data?.lastCheckedAt}
                   visits={selectedStock.visits}
                   events={matchedNews}
+                  liveTicks={liveTicksBySymbol[selectedStock.symbol] || []}
                   height={230}
                 />
               </div>
@@ -1346,6 +1737,52 @@ export default function SmartMarketWatchPage() {
           <span>Close Drawer</span>
         </span>
       </div>
+
+      {/* Floating Attention Escalation Alerts */}
+      <aside
+        aria-label="Category A Escalation Alerts"
+        className="fixed bottom-16 right-4 z-50 flex flex-col space-y-2 max-w-sm pointer-events-none"
+      >
+        {alertToasts.map((toast) => (
+          <div
+            key={toast.id}
+            className="pointer-events-auto bg-surface-container border-2 border-secondary/80 rounded-DEFAULT p-3.5 shadow-2xl flex items-start space-x-3 text-on-surface"
+          >
+            <div className="w-7 h-7 rounded-DEFAULT bg-secondary/20 text-secondary flex items-center justify-center flex-shrink-0 mt-0.5">
+              <span className="material-symbols-outlined text-[18px]">warning</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-secondary text-label-numeric-sm">
+                  {toast.title}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setAlertToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+                  className="text-outline hover:text-on-surface ml-2"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-body-sm text-on-surface-variant mt-0.5 line-clamp-2">
+                {toast.message}
+              </p>
+              <div className="mt-2 flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openDrawer(toast.symbol);
+                    setAlertToasts((prev) => prev.filter((t) => t.id !== toast.id));
+                  }}
+                  className="px-2 py-0.5 rounded-DEFAULT bg-primary/20 hover:bg-primary/30 text-primary text-[11px] font-semibold transition-colors"
+                >
+                  Inspect {toast.symbol} →
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </aside>
     </div>
   );
 }

@@ -15,6 +15,22 @@ router.get("/login", authMiddleware, (req: AuthRequest, res, next) => {
   }
 });
 
+router.get("/status", authMiddleware, async (req: AuthRequest, res) => {
+  const { env } = await import("../config/env");
+  const { prisma } = await import("../db/client");
+  const session = await prisma.brokerSession.findFirst({
+    where: { userId: req.user!.id, provider: "ZERODHA" },
+    orderBy: { createdAt: "desc" },
+  });
+  return res.json({
+    ok: true,
+    mode: env.MARKET_DATA_MODE,
+    hasApiKey: !!env.KITE_API_KEY,
+    hasSession: !!session,
+    brokerUserId: session?.brokerUserId || null,
+  });
+});
+
 router.get("/callback", async (req, res, next) => {
   try {
     const query = z.object({ state: z.string().min(1), request_token: z.string().min(1) }).parse(req.query);

@@ -29,6 +29,7 @@ interface InteractivePriceChartProps {
   checkpointTime?: string | number | null;
   visits?: CheckpointVisit[];
   events?: ChartEvent[];
+  liveTicks?: Array<{ time: number; price: number }>;
   height?: number;
   className?: string;
   showControls?: boolean;
@@ -51,6 +52,7 @@ export default function InteractivePriceChart({
   checkpointTime,
   visits = [],
   events = [],
+  liveTicks = [],
   height = 250,
   className = "",
   showControls = true,
@@ -59,6 +61,7 @@ export default function InteractivePriceChart({
   const [hasContinuousData, setHasContinuousData] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [chartMode, setChartMode] = useState<"area" | "candle">("area");
+  const [streamViewMode, setStreamViewMode] = useState<"points" | "stream">("points");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [hoveredPointKey, setHoveredPointKey] = useState<string | null>(null);
   const [hoveredEvent, setHoveredEvent] = useState<ChartEvent | null>(null);
@@ -564,6 +567,32 @@ export default function InteractivePriceChart({
                   ))}
                 </div>
               </>
+            ) : liveTicks && liveTicks.length >= 3 ? (
+              <div className="inline-flex rounded-DEFAULT bg-surface-variant p-0.5 border border-outline-variant">
+                <button
+                  type="button"
+                  onClick={() => setStreamViewMode("points")}
+                  className={`px-2 py-1 text-[11px] font-bold rounded-sm transition-colors ${
+                    streamViewMode === "points"
+                      ? "bg-surface text-on-surface shadow-xs"
+                      : "text-outline hover:text-on-surface"
+                  }`}
+                >
+                  Points
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStreamViewMode("stream")}
+                  className={`px-2 py-1 text-[11px] font-bold rounded-sm transition-colors flex items-center space-x-1 ${
+                    streamViewMode === "stream"
+                      ? "bg-primary text-background shadow-xs font-bold"
+                      : "text-outline hover:text-on-surface"
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                  <span>Live Stream ({liveTicks.length})</span>
+                </button>
+              </div>
             ) : (
               <div className="px-2.5 py-1 rounded-DEFAULT bg-surface-variant text-outline border border-outline-variant text-[11px] font-medium flex items-center space-x-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-primary" />
@@ -658,6 +687,54 @@ export default function InteractivePriceChart({
                 >
                   📌 ₹{checkpointPrice.toFixed(0)}
                 </text>
+              </g>
+            )}
+
+            {/* Real-time Streaming Ticks Curve (When Live Stream is toggled ON) */}
+            {!hasContinuousData && streamViewMode === "stream" && liveTicks && liveTicks.length >= 2 && (
+              <g className="live-ticks-stream-group">
+                {(() => {
+                  const t0 = liveTicks[0].time;
+                  const tEnd = liveTicks[liveTicks.length - 1].time;
+                  const dt = Math.max(tEnd - t0, 5);
+                  const pts = liveTicks.map((t) => {
+                    const ratio = (t.time - t0) / dt;
+                    const x = padLeft + 40 + ratio * (plotWidth - 80);
+                    const y = getY(t.price);
+                    return { x, y, price: t.price, time: t.time };
+                  });
+                  const pathStr = pts
+                    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+                    .join(" ");
+                  const lastPt = pts[pts.length - 1];
+
+                  return (
+                    <g>
+                      <path
+                        d={`${pathStr} L ${lastPt.x.toFixed(1)} ${padTop + plotHeight} L ${pts[0].x.toFixed(1)} ${padTop + plotHeight} Z`}
+                        fill={`url(#${gradientId})`}
+                        opacity="0.6"
+                      />
+                      <path d={pathStr} fill="none" stroke={strokeColor} strokeWidth="2.5" />
+                      {/* Pulsing live tip indicator */}
+                      <circle
+                        cx={lastPt.x}
+                        cy={lastPt.y}
+                        r="12"
+                        fill={strokeColor}
+                        className="opacity-25 animate-ping"
+                      />
+                      <circle
+                        cx={lastPt.x}
+                        cy={lastPt.y}
+                        r="4.5"
+                        fill="#0f172a"
+                        stroke={strokeColor}
+                        strokeWidth="2.5"
+                      />
+                    </g>
+                  );
+                })()}
               </g>
             )}
 

@@ -149,7 +149,7 @@ export async function applyMarketScenario(
       quoteTimestamp = now;
       symbolSpecs = BASELINE_SYMBOLS.map((s) => ({
         ...s,
-        price: Number((s.price * (1 + (Math.random() * 0.001 - 0.0005))).toFixed(2)),
+        price: Number((s.price * 1.0003).toFixed(2)),
       }));
       break;
   }

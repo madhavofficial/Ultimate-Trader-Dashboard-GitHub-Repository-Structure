@@ -22,6 +22,7 @@ export default function SmartMarketWatchPage() {
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const [actionPending, setActionPending] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState<string>("baseline");
+  const [modalScenario, setModalScenario] = useState<string>("big_move");
 
   // Helper to fetch authorization header if user is logged in
   const getAuthHeaders = (): HeadersInit => {
@@ -269,9 +270,9 @@ export default function SmartMarketWatchPage() {
       {/* MODE INDICATOR / OPERATIONAL CONTROL BAR                                   */}
       {/* ========================================================================= */}
       <div className="w-full bg-surface-container-lowest border-b border-outline-variant px-gutter-desktop py-1.5 flex items-center justify-between text-caption-caps font-caption-caps text-outline">
-        <div className="flex items-center space-x-3 flex-wrap gap-y-1">
+        <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-1.5">
-            <span className="font-bold text-on-surface">MODE:</span>
+            <span className="font-bold text-on-surface">VIEW:</span>
             <button
               onClick={fetchRealSummary}
               className={`px-2 py-0.5 rounded-DEFAULT font-label-numeric-sm text-[11px] transition-all ${
@@ -280,43 +281,39 @@ export default function SmartMarketWatchPage() {
                   : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
               }`}
             >
-              ● Real
+              ● Live Watchlist
             </button>
             <button
-              onClick={() => handleSelectScenario("big_move")}
-              className={`px-2 py-0.5 rounded-DEFAULT font-label-numeric-sm text-[11px] transition-all ${
+              onClick={() => {
+                setModalScenario(selectedScenario);
+                setIsDemoModalOpen(true);
+              }}
+              className={`px-2 py-0.5 rounded-DEFAULT font-label-numeric-sm text-[11px] transition-all flex items-center space-x-1 ${
                 mode === "DEMO"
                   ? "bg-surface-variant text-primary border border-outline-variant font-bold"
                   : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
               }`}
             >
-              ⚡ Demo
+              <span>⚡ Evaluator Demo</span>
+              <span className="text-outline-variant">▾</span>
             </button>
           </div>
 
-          <div className="flex items-center space-x-1 pl-3 border-l border-outline-variant">
-            <span className="font-bold text-on-surface">SCENARIO:</span>
-            {[
-              { id: "baseline", label: "Baseline" },
-              { id: "big_move", label: "Big Move" },
-              { id: "volume_spike", label: "Volume Spike" },
-              { id: "stale", label: "Stale Feed" },
-              { id: "market_closed", label: "Market Closed" },
-              { id: "unchanged", label: "Unchanged" },
-            ].map((sc) => (
+          {mode === "DEMO" && (
+            <div className="hidden sm:flex items-center space-x-1.5 pl-3 border-l border-outline-variant text-[11px]">
+              <span className="text-outline">Scenario:</span>
+              <span className="text-primary font-bold uppercase tracking-wider font-mono">{selectedScenario.replace("_", " ")}</span>
               <button
-                key={sc.id}
-                onClick={() => handleSelectScenario(sc.id)}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium tracking-normal transition-all ${
-                  selectedScenario === sc.id
-                    ? "bg-primary text-on-primary font-bold shadow-sm"
-                    : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-outline-variant/30"
-                }`}
+                onClick={() => {
+                  setModalScenario(selectedScenario);
+                  setIsDemoModalOpen(true);
+                }}
+                className="text-xs text-outline hover:text-on-surface underline ml-1 cursor-pointer"
               >
-                {sc.label}
+                (Change)
               </button>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
         <div className="hidden md:flex items-center space-x-3 text-label-numeric-sm">
           {mode === "DEMO" && (
@@ -1086,12 +1083,12 @@ export default function SmartMarketWatchPage() {
       {/* ========================================================================= */}
       {isDemoModalOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-surface-container border border-outline-variant rounded-DEFAULT max-w-xl w-full p-6 space-y-5 shadow-2xl relative">
+          <div className="bg-surface-container border border-outline-variant rounded-DEFAULT max-w-2xl w-full p-6 space-y-5 shadow-2xl relative">
             <div className="flex items-center justify-between border-b border-outline-variant pb-3">
               <div className="flex items-center space-x-2">
                 <span className="material-symbols-outlined text-primary">science</span>
                 <h3 className="text-headline-sm font-headline-sm text-on-surface font-bold">
-                  Demo Scenario (Evaluator Preview)
+                  Evaluator Scenario Controller
                 </h3>
               </div>
               <button
@@ -1101,35 +1098,112 @@ export default function SmartMarketWatchPage() {
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-            <p className="text-body-md font-body-md text-on-surface-variant">
-              Test how Smart Market Watch preserves attention: Set a baseline checkpoint at 09:30 AM, step away, and return at 01:45 PM. Only meaningful price moves, volume anomalies, and catalysts are highlighted.
+
+            <p className="text-body-sm font-body-sm text-on-surface-variant">
+              Select a deterministic market scenario to evaluate how the watchlist pipeline detects, scores, and prioritizes meaningful changes versus market noise.
             </p>
-            <div className="space-y-3 bg-surface p-4 rounded-DEFAULT border border-outline-variant">
-              <div className="flex items-center justify-between text-label-numeric-sm font-label-numeric-sm">
-                <span className="text-primary font-bold">Baseline Checkpoint (09:30 AM)</span>
-                <span className="text-outline">Baseline Established</span>
-              </div>
-              <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-                <div className="bg-primary h-full w-full"></div>
-              </div>
-              <div className="flex items-center justify-between text-body-sm font-body-sm text-outline">
-                <span>Normal Market Noise Filtered</span>
-                <span className="text-secondary font-semibold">Meaningful Moves Surfaced at T+2h</span>
-              </div>
+
+            {/* Scenario Selection Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
+              {[
+                {
+                  id: "big_move",
+                  title: "Big Move (Relative Alpha)",
+                  badge: "Recommended",
+                  desc: "TATAMOTORS rallies +4.59% (Alpha +4.39%), INFY plunges -2.96% against flat NIFTY 50 (+0.20%).",
+                  behavior: "Surfaces high-beta divergence in Needs Attention.",
+                },
+                {
+                  id: "volume_spike",
+                  title: "Volume Spike (Accumulation)",
+                  badge: "Volume Anomaly",
+                  desc: "RELIANCE surges to 2.90x normal volume pace; TCS surges to 2.82x baseline.",
+                  behavior: "Triggers institutional volume anomaly reason.",
+                },
+                {
+                  id: "stale",
+                  title: "Stale Feed (Stream Dropped)",
+                  badge: "Feed Integrity",
+                  desc: "Active market session with ticker updates delayed >60 seconds.",
+                  behavior: "Flags STALE status with unconfident evaluation warning.",
+                },
+                {
+                  id: "market_closed",
+                  title: "Market Closed (Session End)",
+                  badge: "Exchange Hours",
+                  desc: "Exchange trading session closed; official closing prices displayed.",
+                  behavior: "Confident evaluation: MARKET_CLOSED != STALE.",
+                },
+                {
+                  id: "unchanged",
+                  title: "Unchanged (Quiet Session)",
+                  badge: "Noise Filter",
+                  desc: "All price movements within ±0.03% noise threshold.",
+                  behavior: "All items grouped cleanly into Unchanged with 0 alerts.",
+                },
+                {
+                  id: "baseline",
+                  title: "Baseline (Spot Reset)",
+                  badge: "Reset",
+                  desc: "Resets all watchlist stocks and NIFTY 50 to baseline spot prices.",
+                  behavior: "Establishes fresh reference point for tracking.",
+                },
+              ].map((sc) => {
+                const isSelected = modalScenario === sc.id;
+                return (
+                  <div
+                    key={sc.id}
+                    onClick={() => setModalScenario(sc.id)}
+                    className={`p-3 rounded-DEFAULT border cursor-pointer transition-all ${
+                      isSelected
+                        ? "bg-surface-variant border-primary shadow-sm ring-1 ring-primary"
+                        : "bg-surface hover:bg-surface-variant/60 border-outline-variant"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-body-sm text-on-surface">{sc.title}</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                          isSelected
+                            ? "bg-primary text-on-primary font-bold"
+                            : "bg-surface-container-high text-outline"
+                        }`}
+                      >
+                        {sc.badge}
+                      </span>
+                    </div>
+                    <p className="text-body-xs font-body-xs text-on-surface-variant leading-relaxed">
+                      {sc.desc}
+                    </p>
+                    <p className="text-[11px] text-outline mt-1 font-mono">
+                      ↳ {sc.behavior}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
-            <div className="flex items-center justify-end space-x-3 pt-2">
-              <button
-                className="px-3 py-1.5 rounded-DEFAULT bg-surface-variant text-on-surface text-body-sm font-body-sm"
-                onClick={() => setIsDemoModalOpen(false)}
-              >
-                Close
-              </button>
-              <button
-                className="px-4 py-1.5 rounded-DEFAULT bg-primary text-on-primary text-body-sm font-body-sm font-semibold hover:bg-primary-fixed transition-all"
-                onClick={fetchDemoScenario}
-              >
-                Simulate Scenario →
-              </button>
+
+            <div className="flex items-center justify-between border-t border-outline-variant pt-3">
+              <span className="text-label-numeric-sm text-outline">
+                Selected: <strong className="text-on-surface uppercase font-mono">{modalScenario.replace("_", " ")}</strong>
+              </span>
+              <div className="flex items-center space-x-2">
+                <button
+                  className="px-3 py-1.5 rounded-DEFAULT bg-surface-variant text-on-surface text-body-sm font-body-sm"
+                  onClick={() => setIsDemoModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-4 py-1.5 rounded-DEFAULT bg-primary text-on-primary text-body-sm font-body-sm font-semibold hover:bg-primary-fixed transition-all shadow-sm"
+                  onClick={() => {
+                    void handleSelectScenario(modalScenario);
+                    setIsDemoModalOpen(false);
+                  }}
+                >
+                  Run Scenario →
+                </button>
+              </div>
             </div>
           </div>
         </div>

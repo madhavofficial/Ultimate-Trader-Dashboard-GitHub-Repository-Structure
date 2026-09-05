@@ -94,13 +94,17 @@ test("Smart Market Watch - Deterministic Scenario Controller & Simulation", asyn
     assert.equal(freshness.canEvaluateConfidently, true);
   });
 
-  await t.test("scenario: unchanged holds prices and volumes in neutral bracket", async () => {
+  await t.test("scenario: unchanged holds prices and volumes in deterministic neutral bracket", async () => {
     const res = await applyMarketScenario("unchanged");
     assert.equal(res.scenario, "unchanged");
 
     const tata = getLatestLtp("TATAMOTORS");
     assert.ok(tata);
-    assert.ok(Math.abs(tata.price - 980) < 5); // tightly bound to baseline
+    assert.equal(tata.price, 980.29); // exactly 980 * 1.0003
+
+    const infy = getLatestLtp("INFY");
+    assert.ok(infy);
+    assert.equal(infy.price, 1520.46); // exactly 1520 * 1.0003
   });
 
   // HTTP Endpoint Tests

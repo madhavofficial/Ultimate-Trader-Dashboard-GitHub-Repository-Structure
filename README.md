@@ -10,7 +10,7 @@ An independent engineering submission for the **Code, by Groww 2026** challenge 
 
 ## What It Is & Why It Exists
 
-Conventional market watchlists are **stateless and single-moment**. They show the current market price (LTP) and percentage change relative to the previous day's close ($T_{\text{market\_open}} \rightarrow T_{\text{now}}$).
+Conventional market watchlists are **stateless and single-moment**. They show the current market price (LTP) and percentage change relative to the previous day's close ($T_{\text{open}} \rightarrow T_{\text{now}}$).
 
 If an investor steps away for three hours and returns, a display showing `+0.4% today` conceals the real story:
 - Did the stock plunge $-3.5\%$ on heavy volume and suddenly rebound?
@@ -29,7 +29,7 @@ The system computes state transitions relative to when the user was last active 
 
 | Dimension | Conventional Watchlist | Smart Market Watchlist |
 | :--- | :--- | :--- |
-| **Temporal Reference** | Previous day's close ($T_{\text{prev\_close}} \rightarrow T_{\text{now}}$) | User's personal last-visited checkpoint ($T_{\text{checkpoint}} \rightarrow T_{\text{now}}$) |
+| **Temporal Reference** | Previous day's close ($T_{\text{prev}} \rightarrow T_{\text{now}}$) | User's personal last-visited checkpoint ($T_{\text{checkpoint}} \rightarrow T_{\text{now}}$) |
 | **Statefulness** | Stateless (same view for every user) | Stateful (persisted per-user checkpoints in PostgreSQL) |
 | **Information Density** | Raw price ticks and percentage noise | Triage into 🔴 `NEEDS ATTENTION`, 🟡 `WORTH A LOOK`, ⚪ `UNCHANGED` |
 | **Prioritization Model** | Sorting by 1D price gainers/losers | 4-Factor Attention Score (Price, Volume Pace, Benchmark Alpha, Catalysts) |
@@ -65,7 +65,7 @@ The repository implements a **Hybrid Intelligence System** that cleanly separate
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│                      DETERMINISTIC WATCHLIST CORE (Zero Hallucinations)          │
+│                      DETERMINISTIC WATCHLIST CORE                                │
 │                                                                                  │
 │   • Exact arithmetic delta detection (ΔP%, Volume Pace, Relative Alpha)          │
 │   • Bounded 4-factor scoring model [0 - 100]                                     │
@@ -106,18 +106,18 @@ A conventional watchlist treats every sub-tick price jitter as equal. Smart Mark
 2. **Direct Price Swing Override:** An absolute price swing $\ge 2.50\%$ since the checkpoint automatically promotes an instrument directly to 🔴 **`NEEDS_ATTENTION`**, regardless of other factors. Movements $\ge 1.00\%$ promote to 🟡 **`WORTH_A_LOOK`**.
 3. **Volume Anomaly Gating:** Volume pace is evaluated as a ratio against the checkpoint baseline ($\frac{\text{Current Volume}}{\text{Checkpoint Volume}}$). Pace must exceed $1.0\times$ before contributing any points to attention scoring.
 4. **Benchmark-Relative Alpha:** Movements are evaluated against the NIFTY 50 index over the same elapsed duration. A stock that rises $+1.5\%$ while NIFTY drops $-1.0\%$ exhibits $+2.5\%$ alpha divergence, earning higher attention than a stock moving in tandem with the broad market.
-5. **Event Continuity Keying (`computeEventContinuityKey`):** A stable signature hashing `${symbol}:${significance}:${bucketedPrice}:${newEventCount}` (with price rounded to $0.5\%$ buckets). Minor continuous tick flutter does not generate false alerts or re-render churn.
+5. **Event Continuity Keying (`computeEventContinuityKey`):** A stable signature hashing `symbol:significance:bucketedChange:newEventCount` (with price rounded to 0.5% buckets). Minor continuous tick flutter does not generate false alerts or re-render churn.
 
 ---
 
 ## Mathematical Determinism & Core Concepts
 
-A critical engineering requirement of Smart Market Watchlist is **100% mathematical reproducibility**. Given identical market inputs and the same historical checkpoint, the system must evaluate and categorize an instrument identically every single time — with zero stochastic drift, zero temperature variation, and zero hallucination.
+A critical engineering requirement of Smart Market Watchlist is **100% mathematical reproducibility**. Given identical market inputs and the same historical checkpoint, the system must evaluate and categorize an instrument identically every single time — with zero stochastic drift, zero temperature variation, and strictly predictable outputs.
 
 ### The 4 Core Principles of Deterministic Design
 
-1. **Temporal Immutability ($T_0 \rightarrow T_1$):**
-   A user checkpoint is an immutable database record frozen at timestamp $T_0$. Deltas are calculated as a pure functional projection from the current market tick state ($T_1$) relative to $T_0$.
+1. **Checkpoint-Based Temporal Comparison ($T_0 \rightarrow T_1$):**
+   A user checkpoint preserves market state frozen at timestamp $T_0$. Deltas are calculated relative to $T_0$ rather than previous day's close, ensuring that evaluations reflect specifically what occurred during the user's absence.
 2. **Bounded Normalized Factor Spaces ($f \in [0.0, 1.0]$):**
    Each market dimension is scaled into a bounded, unitless range $[0.0, 1.0]$ with explicit saturation ceilings. This prevents extreme outliers (e.g. an illiquid stock with a $10\times$ volume spike) from distorting the composite score beyond its designated weight.
 3. **Discrete Quantization & Noise Hysteresis:**
@@ -131,17 +131,17 @@ A critical engineering requirement of Smart Market Watchlist is **100% mathemati
 
 ---
 
-## Complete Mathematical Formulation
+## Complete Mathematical Formulation & Deterministic Rules
 
-The entire change detection and scoring pipeline is governed by the following equations implemented in [`attentionService.ts`](backend/src/services/watchlist/attentionService.ts) and [`changeDetectionService.ts`](backend/src/services/watchlist/changeDetectionService.ts):
+The entire change detection and attention scoring pipeline is governed by the following equations implemented in [`attentionService.ts`](backend/src/services/watchlist/attentionService.ts) and [`changeDetectionService.ts`](backend/src/services/watchlist/changeDetectionService.ts):
 
 ### 1. Dimension Delta Calculations
 
 $$\Delta P\% = \left(\frac{P_{\text{now}} - P_{\text{checkpoint}}}{P_{\text{checkpoint}}}\right) \times 100$$
 
-$$V_{\text{ratio}} = \begin{cases} \frac{V_{\text{now}}}{V_{\text{checkpoint}}} & \text{if } V_{\text{checkpoint}} > 0 \land V_{\text{now}} > 0 \\ \text{null} & \text{otherwise} \end{cases}$$
+$$V_{\text{ratio}} = \frac{V_{\text{now}}}{V_{\text{checkpoint}}} \quad \text{for } V_{\text{checkpoint}} > 0 \text{ and } V_{\text{now}} > 0 \;(\text{otherwise null})$$
 
-$$\alpha = \begin{cases} \Delta P\%_{\text{stock}} - \Delta P\%_{\text{NIFTY50}} & \text{if NIFTY 50 quote is available} \\ \text{null} & \text{otherwise} \end{cases}$$
+$$\alpha = \Delta P\%_{\text{stock}} - \Delta P\%_{\text{benchmark}} \quad \text{if NIFTY 50 quote is available} \;(\text{otherwise null})$$
 
 $$C = \sum_{e \in \text{Events}} \mathbf{1}_{\big[\text{symbol} \in e.\text{primarySymbols} \;\land\; e.\text{ingestedAt} \ge T_{\text{checkpoint}}\big]}$$
 
@@ -152,11 +152,11 @@ $$C = \sum_{e \in \text{Events}} \mathbf{1}_{\big[\text{symbol} \in e.\text{prim
   *(Saturates at a $5.0\%$ price move)*
 
 - **Normalized Volume Factor ($25\%$ weight):**
-  $$f_{\text{volume}} = \begin{cases} \min\left(1.0, \frac{V_{\text{ratio}} - 1.0}{2.0}\right) & \text{if } V_{\text{ratio}} > 1.0 \\ 0.0 & \text{otherwise} \end{cases}$$
+  $$f_{\text{volume}} = \min\left(1.0, \frac{\max(0, V_{\text{ratio}} - 1.0)}{2.0}\right) \quad \text{for } V_{\text{ratio}} > 1.0 \;(\text{otherwise } 0.0)$$
   *(Saturates at $3.0\times$ baseline pace; inactive if volume pace $\le 1.0\times$)*
 
 - **Normalized Benchmark Alpha Factor ($20\%$ weight):**
-  $$f_{\text{benchmark}} = \begin{cases} \min\left(1.0, \frac{|\alpha|}{4.0}\right) & \text{if } \alpha \neq \text{null} \\ 0.0 & \text{otherwise} \end{cases}$$
+  $$f_{\text{benchmark}} = \min\left(1.0, \frac{|\alpha|}{4.0}\right) \quad \text{for valid } \alpha \;(\text{otherwise } 0.0)$$
   *(Saturates at a $4.0\%$ relative divergence against NIFTY 50)*
 
 - **Normalized Catalyst Factor ($15\%$ weight):**
@@ -165,70 +165,41 @@ $$C = \sum_{e \in \text{Events}} \mathbf{1}_{\big[\text{symbol} \in e.\text{prim
 
 ### 3. Composite Attention Score
 
-$$\text{RawScore} = \Big(40 \times f_{\text{price}}\Big) + \Big(25 \times f_{\text{volume}}\Big) + \Big(20 \times f_{\text{benchmark}}\Big) + \Big(15 \times f_{\text{catalyst}}\Big)$$
+$$\text{RawScore} = (40 \times f_{\text{price}}) + (25 \times f_{\text{volume}}) + (20 \times f_{\text{benchmark}}) + (15 \times f_{\text{catalyst}})$$
 
 $$\text{Attention Score} = \max\Big(0, \min\big(100, \text{round}(\text{RawScore})\big)\Big)$$
 
-### 4. Priority Triage Function $\mathcal{T}$
+### 4. Priority Triage Rules
 
-The instrument is partitioned into one of three discrete sets via explicit boundary rules:
+Instruments are partitioned into three priority tiers based on deterministic boundary rules:
 
-$$\mathcal{T}(\text{Score}, |\Delta P\%|, C) = \begin{cases}
-\mathbf{NEEDS\_ATTENTION} & \text{if } \text{Score} \ge 60 \lor |\Delta P\%| \ge 2.5\% \lor C \ge 2 \\
-\mathbf{WORTH\_A\_LOOK} & \text{else if } \text{Score} \ge 30 \lor |\Delta P\%| \ge 1.0\% \\
-\mathbf{UNCHANGED} & \text{otherwise}
-\end{cases}$$
+| Priority Tier | Classification Condition | Actionable Meaning |
+| :--- | :--- | :--- |
+| 🔴 **`NEEDS_ATTENTION`** | `Score >= 60` **OR** `|ΔP%| >= 2.5%` **OR** `C >= 2` | High-beta breakout, sharp plunge, severe volume surge, or corporate catalyst |
+| 🟡 **`WORTH_A_LOOK`** | `Score >= 30` **OR** `|ΔP%| >= 1.0%` | Moderate trend shift, steady accumulation, or notable benchmark divergence |
+| ⚪ **`UNCHANGED`** | All other instruments | Normal market noise ($< 1.0\%$); displayed compactly without visual alarm |
 
 ### 5. Event Continuity Signature
 
-$$\text{ContinuityKey} = \text{Symbol} : \mathcal{T} : \left(\frac{\lfloor 2 \cdot \Delta P\% + 0.5 \rfloor}{2}\right) : C$$
+To eliminate client-side re-render churn across high-frequency tick jitter, continuous price changes are quantized into discrete $0.5\%$ buckets:
 
-### 6. Temporal Freshness Evaluation Function
+$$\text{ContinuityKey} = \text{Symbol} : \text{Tier} : \text{Bucket}(\Delta P\%) : C$$
 
-Given current wall-clock epoch $T_{\text{now}}$ and latest quote observation $T_{\text{quote}}$:
+$$\text{Bucket}(\Delta P\%) = \frac{\lfloor 2 \cdot \Delta P\% + 0.5 \rfloor}{2}$$
 
-$$\text{AgeSeconds} = \max\left(0, \left\lfloor \frac{T_{\text{now}} - T_{\text{quote}}}{1000} \right\rfloor\right)$$
+### 6. Temporal Freshness Evaluation Rules
 
-$$\text{FreshnessState} = \begin{cases}
-\mathbf{MARKET\_CLOSED} & \text{if } \neg\text{Session.isOpen} \\
-\mathbf{DATA\_UNAVAILABLE} & \text{else if } T_{\text{quote}} \le 0 \lor \text{feedCount} = 0 \\
-\mathbf{LIVE} & \text{else if } \text{AgeSeconds} \le 5 \\
-\mathbf{DELAYED} & \text{else if } \text{AgeSeconds} \le 30 \\
-\mathbf{STALE} & \text{otherwise (AgeSeconds } > 30\text{)}
-\end{cases}$$
+Given elapsed quote age $\text{AgeSeconds} = \max\left(0, \lfloor (T_{\text{now}} - T_{\text{quote}}) / 1000 \rfloor\right)$:
 
-$$\text{canEvaluateConfidently} = \begin{cases} \text{true} & \text{if FreshnessState} \in \{\text{LIVE}, \text{DELAYED}, \text{MARKET\_CLOSED}\} \\ \text{false} & \text{if FreshnessState} \in \{\text{STALE}, \text{DATA\_UNAVAILABLE}\} \end{cases}$$
+| Freshness State | Condition | Confidence | Evaluator Interpretation |
+| :--- | :--- | :---: | :--- |
+| **`MARKET_CLOSED`** | Session is outside trading hours (weekend or after 15:30 IST) | Confident (`true`) | Official exchange closing prices; fully trustworthy for delta analysis |
+| **`DATA_UNAVAILABLE`** | Active session, but quote timestamp $\le 0$ or zero feeds connected | Degraded (`false`) | Feed unavailable; evaluation suspended |
+| **`LIVE`** | Active session and $\text{AgeSeconds} \le 5\text{s}$ | Confident (`true`) | Real-time market ticks streaming normally |
+| **`DELAYED`** | Active session and $5\text{s} < \text{AgeSeconds} \le 30\text{s}$ | Confident (`true`) | Minor feed latency detected; ticks still flowing |
+| **`STALE`** | Active session and $\text{AgeSeconds} > 30\text{s}$ | Degraded (`false`) | Stream dropped or frozen during regular trading hours |
 
----
 
-## Attention Scoring Model
-
-The scoring engine ([`attentionService.ts`](backend/src/services/watchlist/attentionService.ts)) implements an explicit, hand-engineered mathematical weighting formula. It is **not** a black-box or machine-learning model:
-
-$$\text{Attention Score} = \text{round}\Big((40 \times \text{PriceFactor}) + (25 \times \text{VolumeFactor}) + (20 \times \text{BenchmarkAlpha}) + (15 \times \text{CatalystCount})\Big)$$
-
-The composite score is strictly clamped to an integer between `0` and `100`.
-
-### Factor Breakdown & Clamping Logic
-
-| Factor | Weight | Formula in Code | Normalization & Saturation Behavior |
-| :--- | :---: | :--- | :--- |
-| **Price Factor** | 40% | `min(1.0, \|ΔP%\| / 5.0)` | Percentage change since checkpoint. A $5.0\%$ price move reaches maximum saturation of $1.0$ (40 points). |
-| **Volume Factor** | 25% | `min(1.0, max(0, volumeRatio - 1.0) / 2.0)` | Volume pace ratio vs. checkpoint. Only activates when `volumeRatio > 1.0`. A $3.0\times$ pace reaches $1.0$ (25 points). Returns 0 if volume baseline is unavailable. |
-| **Benchmark Alpha** | 20% | `min(1.0, \|stockΔP% - NIFTY50ΔP%\| / 4.0)` | Absolute divergence against NIFTY 50 since checkpoint. A $4.0\%$ divergence reaches $1.0$ (20 points). Evaluates to `null`/0 if index is unavailable. |
-| **Catalyst Count** | 15% | `min(1.0, newEventCount / 2.0)` | Count of new corporate actions, earnings releases, or macro news events since checkpoint. $\ge 2$ new events reach $1.0$ (15 points). |
-
-### Priority Classification Tiers
-
-- 🔴 **`NEEDS_ATTENTION`**:
-  - `attentionScore >= 60` **OR** `|ΔP%| >= 2.5%` **OR** `newEventCount >= 2`
-  - High-beta breakouts, major drops, severe volume spikes, or fresh corporate catalysts.
-- 🟡 **`WORTH_A_LOOK`**:
-  - `attentionScore >= 30` **OR** `|ΔP%| >= 1.0%`
-  - Moderate trend shifts, steady accumulation, or notable benchmark divergence.
-- ⚪ **`UNCHANGED`**:
-  - Does not satisfy the above thresholds.
-  - Quiet trading noise, displayed compactly without visual alarm.
 
 ---
 
@@ -249,9 +220,9 @@ The freshness evaluator ([`freshnessService.ts`](backend/src/services/watchlist/
 
 | State | Session & Timing | Confidence | Meaning |
 | :--- | :--- | :---: | :--- |
-| **`LIVE`** | Regular trading session (09:15–15:30 IST), quote age $\le 5$s | Confident (`true`) | Real-time market ticks streaming normally. |
-| **`DELAYED`** | Regular trading session, quote age between $5$s and $30$s | Confident (`true`) | Minor feed latency detected; ticks still flowing. |
-| **`STALE`** | Regular trading session, quote age $> 30$s | Degraded (`false`) | Stream dropped or frozen during active market hours; warning displayed. |
+| **`LIVE`** | Regular trading session (09:15–15:30 IST), quote age $\le 5\text{s}$ | Confident (`true`) | Real-time market ticks streaming normally. |
+| **`DELAYED`** | Regular trading session, quote age between 5s and 30s | Confident (`true`) | Minor feed latency detected; ticks still flowing. |
+| **`STALE`** | Regular trading session, quote age $> 30\text{s}$ | Degraded (`false`) | Stream dropped or frozen during active market hours; warning displayed. |
 | **`MARKET_CLOSED`** | Outside NSE trading hours or weekend | Confident (`true`) | Official exchange closing prices; fully valid for delta comparison. |
 | **`DATA_UNAVAILABLE`**| Regular trading session, zero ticker feeds connected | Degraded (`false`) | No market feed discoverable; delta evaluation suspended. |
 

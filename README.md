@@ -126,7 +126,7 @@ To enable reproducible end-to-end evaluation without relying on exchange operati
 | Scenario | Simulated Market State | What It Demonstrates |
 | :--- | :--- | :--- |
 | **1. Baseline** | Standard calm trading day. Current prices and volumes match checkpoint values. | Verifies calm market behavior: all symbols categorized as `UNCHANGED`, zero false alerts. |
-| **2. Big Move** | Significant price divergences: `TATAMOTORS` rallies +4.59%, `INFY` plunges -2.96% against flat NIFTY 50. | Verifies price swing threshold overrides and promotion directly into `NEEDS_ATTENTION`. |
+| **2. Big Move** | Major price divergences. In the Evaluator Demo fixture: `RELIANCE` rallies +4.50% (Score 84, 2.8× volume pace, +3.50% alpha, 1 catalyst) into `NEEDS_ATTENTION`; `TCS` dips -1.70% into `WORTH_A_LOOK`. (In live stream injection: `TATAMOTORS` rallies +4.59%, `INFY` plunges -2.96%). | Verifies multi-factor scoring and direct promotion into `NEEDS_ATTENTION`. |
 | **3. Volume Spike** | Institutional accumulation surge: `RELIANCE` volume spikes to 2.90x, `TCS` surges to 2.82x normal pace. | Verifies volume ratio scoring and volume-driven rank promotion without massive price swings. |
 | **4. Stale Feed** | Active trading session with market feed suspended for > 60 seconds. | Verifies freshness degradation: flags `STALE` status and marks confidence as degraded. |
 | **5. Market Closed** | Trading session set to `CLOSED`, showing official closing prices. | Proves `MARKET_CLOSED != STALE`: status displays `MARKET_CLOSED` with high confidence. |
@@ -239,8 +239,10 @@ Evaluators can test the core workflow end-to-end using the built-in scenario run
 6. **Run Scenario:** Click **"Run Scenario"**.
 7. **Return to Watchlist:** Notice the UI seamlessly transitions into the scenario briefing.
 8. **Inspect Ranked Changes:**
-   - Observe `RELIANCE` promoted to **NEEDS ATTENTION** with a high Attention Score.
-   - Expand the item to inspect the deterministic reason badges (Price change, Volume pace, Benchmark alpha).
+   - In the Evaluator Demo view, observe **`RELIANCE`** promoted directly to **NEEDS ATTENTION** with an Attention Score of 84 (driven by +4.50% price change, 2.8× volume pace, +3.50% benchmark alpha, and a new catalyst).
+   - Notice **`TCS`** categorized under **WORTH A LOOK** (-1.70% shift, underperforming NIFTY 50 by -2.70%).
+   - Expand the items to inspect the structured, deterministic reason badges.
+   *(Note: If running against an authenticated seeded database watchlist, `TATAMOTORS` at +4.59% and `INFY` at -2.96% will reflect the live feed divergence).*
 9. **Acknowledge Changes:** Click **"Mark all as checked"** to reset the checkpoint baseline to current market prices.
 10. **Test Edge Cases:** Reopen the modal to test **"Stale Feed"** (inspect the degraded stream warning) or **"Market Closed"** (verify that closed markets remain confidently evaluable).
 
@@ -259,5 +261,5 @@ The repository has been verified across unit, integration, and browser end-to-en
 
 ## Branch Model
 
-- **`madhav`**: Clean canonical branch containing the production-ready application architecture.
-- **`hackathon-scenarios`**: Active submission branch containing the deterministic evaluator scenarios, mock stream controllers, and demo interfaces for the hackathon presentation.
+- **`madhav`**: Clean canonical application branch.
+- **`hackathon-scenarios`**: Submission branch containing deterministic evaluator scenarios and demo infrastructure.

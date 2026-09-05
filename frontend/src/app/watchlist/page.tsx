@@ -1,137 +1,127 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import {
+  WatchlistSummaryResponse,
+  WatchlistChangeItem,
+  MarketFreshnessState,
+} from "../../types/watchlistContract";
 
-type AppState = "live" | "drawer" | "caughtup" | "newuser" | "stale";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type SelectedStock = {
-  symbol: string;
-  name: string;
-  score: number;
-  sector: string;
-  badge: string;
-  badgeColor: "primary" | "secondary" | "tertiary";
-  currentPrice: number;
-  checkpointPrice: number;
-  deltaPct: number;
-  deltaAmount: number;
-  checkpointTime: string;
-  alpha: number;
-  volumeRatio: number;
-  timeElapsed: string;
-  catalystsCount: number;
-  analystSynthesis: string;
-  timeline: Array<{
-    time: string;
-    text: string;
-    isHighlight?: boolean;
-  }>;
-};
-
-const SAMPLE_STOCKS: Record<string, SelectedStock> = {
-  reliance: {
-    symbol: "RELIANCE",
-    name: "Reliance Industries Ltd.",
-    score: 86,
-    sector: "Refined Petroleum & Telecommunications",
-    badge: "Unusual Move & Vol Spike",
-    badgeColor: "primary",
-    currentPrice: 1468.20,
-    checkpointPrice: 1404.95,
-    deltaPct: 4.50,
-    deltaAmount: 63.25,
-    checkpointTime: "11:42 AM",
-    alpha: 3.10,
-    volumeRatio: 2.7,
-    timeElapsed: "2h 17m",
-    catalystsCount: 2,
-    analystSynthesis:
-      "RELIANCE moved substantially higher than its previous checkpoint at 11:42 AM, registering a +4.50% price divergence accompanied by 2.7× standard volume velocity. The move represents +3.10% relative alpha over NIFTY 50 during the identical time window.",
-    timeline: [
-      { time: "11:42 AM", text: "Checkpoint established at ₹1,404.95 baseline." },
-      { time: "12:15 PM", text: "Abnormal order flow detected: 4 blocks totaling 850k shares.", isHighlight: true },
-      { time: "12:58 PM", text: "Regulatory Disclosure: Jio Telecom revised enterprise tariff brackets.", isHighlight: true },
-      { time: "01:30 PM", text: "+4.0% price threshold breached, Attention Score calculated at 86.", isHighlight: true },
-    ],
-  },
-  tatamotors: {
-    symbol: "TATAMOTORS",
-    name: "Tata Motors Passenger Vehicles",
-    score: 81,
-    sector: "Automotive & Commercial Vehicles",
-    badge: "Abrupt Gap Down",
-    badgeColor: "secondary",
-    currentPrice: 982.50,
-    checkpointPrice: 1021.30,
-    deltaPct: -3.80,
-    deltaAmount: -38.80,
-    checkpointTime: "11:42 AM",
-    alpha: -4.20,
-    volumeRatio: 3.1,
-    timeElapsed: "2h 17m",
-    catalystsCount: 1,
-    analystSynthesis:
-      "TATAMOTORS gapped down sharply relative to its previous checkpoint at 11:42 AM, registering a -3.80% price drawdown under heavy volume velocity (3.1× baseline). It lagged the NIFTY Auto index by -4.20% amidst UK supply chain disclosures.",
-    timeline: [
-      { time: "11:42 AM", text: "Checkpoint established at ₹1,021.30 baseline." },
-      { time: "12:10 PM", text: "Heavy volume selling recorded (1.2M shares).", isHighlight: true },
-      { time: "12:45 PM", text: "Catalyst: Jaguar Land Rover reported temporary EU delivery bottlenecks.", isHighlight: true },
-      { time: "01:15 PM", text: "-3.5% breach reached; Attention Score flagged at 81.", isHighlight: true },
-    ],
-  },
-  zomato: {
-    symbol: "ZOMATO",
-    name: "Zomato Ltd.",
-    score: 78,
-    sector: "Consumer Internet & Quick Commerce",
-    badge: "Blinkit Expansion Momentum",
-    badgeColor: "primary",
-    currentPrice: 248.80,
-    checkpointPrice: 234.30,
-    deltaPct: 6.20,
-    deltaAmount: 14.50,
-    checkpointTime: "11:42 AM",
-    alpha: 5.80,
-    volumeRatio: 2.4,
-    timeElapsed: "2h 17m",
-    catalystsCount: 1,
-    analystSynthesis:
-      "ZOMATO experienced sustained buy-side block accumulation breaking its all-time high resistance, accompanied by 2.4× baseline trading turnover and broker upgrades on Dark Store expansions.",
-    timeline: [
-      { time: "11:42 AM", text: "Checkpoint established at ₹234.30 baseline." },
-      { time: "12:05 PM", text: "Buy-side accumulation sweeps resistance at ₹240.", isHighlight: true },
-      { time: "12:40 PM", text: "Broker research revised Dark Store target count to 1,200.", isHighlight: true },
-      { time: "01:25 PM", text: "All-time high established at ₹248.80; Attention Score 78.", isHighlight: true },
-    ],
-  },
-};
+type AppMode = "REAL" | "DEMO";
 
 export default function SmartMarketWatchPage() {
-  const [appState, setAppState] = useState<AppState>("live");
-  const [selectedStockKey, setSelectedStockKey] = useState<string>("reliance");
+  const [mode, setMode] = useState<AppMode>("REAL");
+  const [data, setData] = useState<WatchlistSummaryResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedStockSymbol, setSelectedStockSymbol] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isTimeTravelOpen, setIsTimeTravelOpen] = useState(false);
-  const [lastCheckedText, setLastCheckedText] = useState("2 hours, 17 mins ago");
-  const [lastCheckedSubtext, setLastCheckedSubtext] = useState("(11:42 AM IST)");
+  const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
 
-  const selectedStock = SAMPLE_STOCKS[selectedStockKey] || SAMPLE_STOCKS.reliance;
+  // Helper to fetch authorization header if user is logged in
+  const getAuthHeaders = (): HeadersInit => {
+    if (typeof window === "undefined") return {};
+    const token = localStorage.getItem("accessToken");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
 
-  const handleMarkAllAsChecked = useCallback(() => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    });
-    setLastCheckedText("Just now");
-    setLastCheckedSubtext(`(Today, ${timeString} IST)`);
-    setIsDrawerOpen(false);
-    setAppState("caughtup");
+  // 1. REAL MODE: Load live watchlist summary from backend
+  const fetchRealSummary = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/watchlist/summary`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load watchlist summary (${res.status})`);
+      }
+      const json: WatchlistSummaryResponse = await res.json();
+      setData(json);
+      setMode("REAL");
+    } catch (err: any) {
+      setError(err.message || "Failed to connect to backend market service");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const openDrawer = (stockKey: string) => {
-    setSelectedStockKey(stockKey);
+  // 2. DEMO MODE: Load deterministic evaluator scenario from backend
+  const fetchDemoScenario = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/watchlist/demo-scenario`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load demo scenario (${res.status})`);
+      }
+      const json: WatchlistSummaryResponse = await res.json();
+      setData(json);
+      setMode("DEMO");
+      setIsDemoModalOpen(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to trigger evaluator demo scenario");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // 3. CHECKPOINT: Acknowledge current spot prices and reset baseline
+  const handleMarkAllAsChecked = useCallback(async () => {
+    setActionPending(true);
+    try {
+      const res = await fetch(`${API_URL}/watchlist/checkpoint`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to record checkpoint (${res.status})`);
+      }
+      setIsDrawerOpen(false);
+      // Immediately refresh the real summary to observe zero delta "caught up" state
+      await fetchRealSummary();
+    } catch (err: any) {
+      alert(`Error setting checkpoint: ${err.message}`);
+    } finally {
+      setActionPending(false);
+    }
+  }, [fetchRealSummary]);
+
+  // Initial mount: load real watchlist summary
+  useEffect(() => {
+    fetchRealSummary();
+  }, [fetchRealSummary]);
+
+  // Flatten all items across groups for quick lookup in detail drawer
+  const allStocks = useMemo(() => {
+    if (!data) return [];
+    return [
+      ...data.groups.needsAttention,
+      ...data.groups.worthALook,
+      ...data.groups.unchanged,
+    ];
+  }, [data]);
+
+  const selectedStock: WatchlistChangeItem | null = useMemo(() => {
+    if (!selectedStockSymbol || !allStocks.length) return null;
+    return allStocks.find((s) => s.symbol === selectedStockSymbol) || null;
+  }, [selectedStockSymbol, allStocks]);
+
+  const openDrawer = (symbol: string) => {
+    setSelectedStockSymbol(symbol);
     setIsDrawerOpen(true);
   };
 
@@ -139,7 +129,7 @@ export default function SmartMarketWatchPage() {
     setIsDrawerOpen(false);
   };
 
-  // Global keybindings (matching Stitch design prototype)
+  // Keyboard shortcut listener: 'C' to checkpoint, 'ESC' to close drawer
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -147,25 +137,9 @@ export default function SmartMarketWatchPage() {
 
       if (e.key === "Escape") {
         setIsDrawerOpen(false);
-        setIsTimeTravelOpen(false);
+        setIsDemoModalOpen(false);
       } else if (e.key === "c" || e.key === "C") {
         handleMarkAllAsChecked();
-      } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
-        const stateMap: Record<string, AppState> = {
-          "1": "live",
-          "2": "drawer",
-          "3": "caughtup",
-          "4": "newuser",
-          "5": "stale",
-        };
-        const nextState = stateMap[e.key];
-        if (nextState === "drawer") {
-          setAppState("live");
-          setIsDrawerOpen(true);
-        } else {
-          setIsDrawerOpen(false);
-          setAppState(nextState);
-        }
       }
     };
 
@@ -173,98 +147,87 @@ export default function SmartMarketWatchPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleMarkAllAsChecked]);
 
+  // Helper for freshness status display
+  const renderFreshnessBadge = (state: MarketFreshnessState) => {
+    switch (state) {
+      case "LIVE":
+        return {
+          dotClass: "bg-primary animate-pulse",
+          text: "Live Feed",
+        };
+      case "DELAYED":
+        return {
+          dotClass: "bg-tertiary",
+          text: "Delayed Feed",
+        };
+      case "STALE":
+        return {
+          dotClass: "bg-secondary",
+          text: "Feed Stale",
+        };
+      case "MARKET_CLOSED":
+        return {
+          dotClass: "bg-outline",
+          text: "Market Closed (Settled)",
+        };
+      case "DATA_UNAVAILABLE":
+      default:
+        return {
+          dotClass: "bg-outline-variant",
+          text: "Feed Unavailable",
+        };
+    }
+  };
+
+  const freshnessInfo = renderFreshnessBadge(data?.marketFreshness.state || "LIVE");
+
   return (
     <div className="bg-background text-on-surface antialiased min-h-screen selection:bg-primary-container selection:text-on-primary-container">
       {/* ========================================================================= */}
-      {/* TOP STATE CONTROLLER / DEMO SWITCHER BAR (Interactive State Navigation)    */}
+      {/* MODE INDICATOR / OPERATIONAL CONTROL BAR                                   */}
       {/* ========================================================================= */}
       <div className="w-full bg-surface-container-lowest border-b border-outline-variant px-gutter-desktop py-1.5 flex items-center justify-between text-caption-caps font-caption-caps text-outline">
         <div className="flex items-center space-x-2">
-          <span className="font-bold text-on-surface">PROTOTYPE STATE:</span>
+          <span className="font-bold text-on-surface">OPERATIONAL MODE:</span>
           <button
-            id="btn-state-live"
-            onClick={() => {
-              setAppState("live");
-              setIsDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              appState === "live" && !isDrawerOpen
-                ? "bg-surface-variant text-primary border border-outline-variant"
+            onClick={fetchRealSummary}
+            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
+              mode === "REAL"
+                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
                 : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
             }`}
           >
-            [1] Live Deltas
+            ● Real Mode (Live Backend)
           </button>
           <button
-            id="btn-state-drawer"
-            onClick={() => {
-              setAppState("live");
-              openDrawer("reliance");
-            }}
-            className={`px-2 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              isDrawerOpen
-                ? "bg-surface-variant text-primary border border-outline-variant"
+            onClick={fetchDemoScenario}
+            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
+              mode === "DEMO"
+                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
                 : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
             }`}
           >
-            [2] Detail Drawer
-          </button>
-          <button
-            id="btn-state-caughtup"
-            onClick={() => {
-              setAppState("caughtup");
-              setIsDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              appState === "caughtup"
-                ? "bg-surface-variant text-primary border border-outline-variant"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            [3] All Caught Up
-          </button>
-          <button
-            id="btn-state-newuser"
-            onClick={() => {
-              setAppState("newuser");
-              setIsDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              appState === "newuser"
-                ? "bg-surface-variant text-primary border border-outline-variant"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            [4] First Visit
-          </button>
-          <button
-            id="btn-state-stale"
-            onClick={() => {
-              setAppState("stale");
-              setIsDrawerOpen(false);
-            }}
-            className={`px-2 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              appState === "stale"
-                ? "bg-surface-variant text-primary border border-outline-variant"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            [5] Market Closed
+            ⚡ Demo Mode (Evaluator Scenario)
           </button>
         </div>
         <div className="hidden md:flex items-center space-x-3 text-label-numeric-sm">
+          {mode === "DEMO" && (
+            <span className="text-tertiary font-bold">
+              [EVALUATOR SCENARIO ACTIVE — DETERMINISTIC T0 → T1 DELTAS]
+            </span>
+          )}
           <span>
-            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">1-5</kbd> to jump states
+            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">C</kbd> to checkpoint
           </span>
           <span>•</span>
           <span>
-            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">C</kbd> to checkpoint
+            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">ESC</kbd> to close drawer
           </span>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* SHARED COMPONENT: TopNavBar                                               */}
+      {/* SHARED HEADER                                                             */}
       {/* ========================================================================= */}
       <header className="flex justify-between items-center w-full px-gutter-desktop h-14 bg-surface border-b border-outline-variant sticky top-0 z-30">
         {/* Left Cluster: Product Wordmark + Watchlist Indicator */}
@@ -282,10 +245,10 @@ export default function SmartMarketWatchPage() {
               </span>
             </div>
           </div>
-          {/* Segment Selector / Watchlist Badge */}
+          {/* Segment Selector */}
           <div className="hidden lg:flex items-center space-x-2 pl-4 border-l border-outline-variant text-body-sm font-body-sm">
             <span className="px-2 py-0.5 rounded-DEFAULT bg-surface-container-high text-on-surface border border-outline-variant text-label-numeric-sm font-label-numeric-sm">
-              NSE: Watchlist 1 (Core Tech &amp; Bluechips)
+              NSE: Primary Watchlist ({data?.counts.total ?? 0} Equities)
             </span>
             <span className="text-outline-variant">▾</span>
           </div>
@@ -302,657 +265,528 @@ export default function SmartMarketWatchPage() {
           <a
             aria-current="page"
             className="text-primary border-b-2 border-primary font-medium pb-3 text-body-md font-body-md cursor-pointer"
-            onClick={() => setAppState("live")}
+            onClick={fetchRealSummary}
           >
             What Changed
           </a>
-          <a
-            className="text-on-surface-variant hover:text-on-surface font-medium pb-3 transition-colors duration-150 text-body-md font-body-md cursor-pointer"
-            onClick={() => alert("Alerts Log: 3 high-divergence triggers logged today.")}
+          <button
+            className="text-on-surface-variant hover:text-on-surface font-medium pb-3 transition-colors duration-150 text-body-md font-body-md"
+            onClick={() => alert(`Status Note: ${data?.marketFreshness.note || "All systems nominal."}`)}
           >
-            Alerts Log
-          </a>
+            Feed Status
+          </button>
         </nav>
 
-        {/* Right Cluster: Live Ticker Heartbeat + Actions */}
+        {/* Right Cluster: Live Feed Pill + Actions */}
         <div className="flex items-center space-x-3">
-          {/* Live Market Pill with tooltip */}
+          {/* Live Market Pill */}
           <div
             className="hidden xl:flex items-center space-x-2 bg-surface-container-lowest px-2.5 py-1 rounded-DEFAULT border border-outline-variant font-label-numeric-sm text-label-numeric-sm"
-            title="Direct feed from NSE"
+            title={data?.marketFreshness.note || "Direct market stream"}
           >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                appState === "stale" ? "bg-tertiary" : "bg-primary animate-pulse"
-              }`}
-            ></span>
-            <span className="text-on-surface-variant">
-              {appState === "stale" ? "Market Closed (Settled)" : "Live · 4s ago"}
-            </span>
+            <span className={`w-2 h-2 rounded-full ${freshnessInfo.dotClass}`}></span>
+            <span className="text-on-surface-variant">{freshnessInfo.text}</span>
             <span className="text-outline">|</span>
             <span className="text-on-surface font-semibold">NIFTY 50:</span>
-            <span className="text-secondary font-semibold">24,842.10 (-0.14%)</span>
+            <span className="text-primary font-semibold">Benchmark Tracked</span>
           </div>
 
-          {/* Secondary Demo Scenario (Evaluator Test Trigger) */}
+          {/* Secondary Action: Demo Scenario Trigger */}
           <button
             className="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-1 text-label-numeric-sm font-label-numeric-sm border border-outline-variant/60 rounded-DEFAULT bg-surface-container/60 hover:bg-surface-container text-outline hover:text-on-surface transition-colors duration-150 active:scale-95"
-            onClick={() => setIsTimeTravelOpen(true)}
-            title="Demo Scenario for Evaluators"
+            onClick={() => setIsDemoModalOpen(true)}
+            title="Evaluator demo scenario preview"
           >
             <span className="material-symbols-outlined text-[14px]">science</span>
             <span>Demo Scenario</span>
           </button>
 
-          {/* Trailing Primary Action (Mark Checkpoint) */}
+          {/* Primary Action: Mark Checkpoint */}
           <button
-            className="inline-flex items-center space-x-1.5 px-3 py-1 bg-surface-variant border border-outline-variant hover:border-primary text-on-surface hover:text-primary rounded-DEFAULT text-label-numeric-sm font-label-numeric-sm font-medium transition-all duration-150 active:scale-95 shadow-sm"
+            disabled={actionPending}
+            className="inline-flex items-center space-x-1.5 px-3 py-1 bg-surface-variant border border-outline-variant hover:border-primary text-on-surface hover:text-primary rounded-DEFAULT text-label-numeric-sm font-label-numeric-sm font-medium transition-all duration-150 active:scale-95 shadow-sm disabled:opacity-50"
             onClick={handleMarkAllAsChecked}
+            title="Acknowledge current market state as new baseline"
           >
             <span className="material-symbols-outlined text-primary text-[15px]">done_all</span>
-            <span>Mark Checkpoint</span>
+            <span>{actionPending ? "Updating..." : "Mark Checkpoint"}</span>
           </button>
 
-          {/* Trailing Icon Actions */}
-          <div className="flex items-center space-x-1 border-l border-outline-variant pl-2">
-            <button
-              className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
-              onClick={() => setIsTimeTravelOpen(true)}
-              title="Scenario History"
-            >
-              <span className="material-symbols-outlined">history</span>
-            </button>
-            <button
-              className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150 relative"
-              title="Notifications"
-            >
-              <span className="material-symbols-outlined">notifications</span>
-              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-secondary-container"></span>
-            </button>
-            <button
-              className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
-              title="Settings"
-            >
-              <span className="material-symbols-outlined">tune</span>
-            </button>
-          </div>
+          {/* Quick Refresh */}
+          <button
+            className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
+            onClick={mode === "REAL" ? fetchRealSummary : fetchDemoScenario}
+            title="Refresh Data"
+          >
+            <span className={`material-symbols-outlined ${loading ? "animate-spin" : ""}`}>
+              refresh
+            </span>
+          </button>
 
-          {/* Analyst Profile */}
+          {/* User Profile */}
           <div
             className="w-7 h-7 rounded-DEFAULT bg-surface-container-high border border-outline-variant flex items-center justify-center ml-1 text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold"
-            title="Analyst profile avatar"
+            title="Active user session"
           >
-            RK
+            {data?.userId ? data.userId.slice(0, 2).toUpperCase() : "AG"}
           </div>
         </div>
       </header>
 
       {/* ========================================================================= */}
-      {/* STALE DATA / MARKET CLOSED BANNER (Conditional for State 5)              */}
+      {/* MARKET CLOSED / FEED LATENCY BANNER                                       */}
       {/* ========================================================================= */}
-      {appState === "stale" && (
+      {data?.marketFreshness.state === "MARKET_CLOSED" && (
         <div className="w-full bg-surface-container-low border-b border-outline-variant px-gutter-desktop py-2.5 transition-all">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
             <div className="flex items-center space-x-2.5">
-              <span className="material-symbols-outlined text-tertiary">warning</span>
+              <span className="material-symbols-outlined text-tertiary">info</span>
               <div>
                 <span className="font-headline-sm text-headline-sm text-on-surface">
-                  Market Closed: Friday Closing Settlement Active
+                  Market Closed
                 </span>
                 <span className="text-body-sm font-body-sm text-on-surface-variant ml-2">
-                  Displaying closing snapshot from 15:30 IST. Live exchange multicast sockets are paused until Monday 09:00 IST.
+                  {data.marketFreshness.note}
                 </span>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
-              <span className="px-2 py-0.5 rounded-DEFAULT bg-tertiary/10 text-tertiary border border-tertiary/30 font-label-numeric-sm text-label-numeric-sm">
-                SETTLED T+1
-              </span>
-              <button
-                className="text-primary hover:underline font-label-numeric-sm text-label-numeric-sm"
-                onClick={() => setAppState("live")}
-              >
-                Return to Live Sim →
-              </button>
-            </div>
+            <span className="px-2 py-0.5 rounded-DEFAULT bg-surface-variant text-outline border border-outline-variant font-label-numeric-sm text-label-numeric-sm">
+              SETTLED
+            </span>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MAIN WORKSPACE CONTAINER                                                  */}
+      {/* MAIN CONTAINER                                                            */}
       {/* ========================================================================= */}
       <main className="max-w-7xl mx-auto px-gutter-desktop py-6 space-y-6">
-        {/* 1. TEMPORAL HEADER & ATTENTION TRIAGE BAR */}
-        <section className="bg-surface-container-low border border-outline-variant rounded-DEFAULT p-5 relative overflow-hidden">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-            {/* Left: Warm & Calm Briefing Headline */}
-            <div className="space-y-2">
-              <div className="flex items-center space-x-3">
-                <span className="px-2 py-0.5 rounded-DEFAULT bg-primary/10 text-primary text-label-numeric-sm font-label-numeric-sm font-semibold border border-primary/20">
-                  WATCHLIST BRIEFING
-                </span>
-                <span className="text-body-sm text-outline-variant font-label-numeric-sm">
-                  12 Tracked Equities
-                </span>
-              </div>
-              <h1 className="text-headline-xl font-headline-xl text-on-surface font-semibold tracking-tight leading-snug">
-                What meaningfully changed while you were away?
-              </h1>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-body-md font-body-md text-on-surface-variant pt-0.5">
-                <span className="flex items-center space-x-1.5">
-                  <span className="material-symbols-outlined text-primary text-[18px]">schedule</span>
-                  <span className="text-on-surface font-medium">Last checked:</span>
-                  <strong className="text-primary font-label-numeric-md font-semibold">
-                    {lastCheckedText}
-                  </strong>
-                  <span className="text-outline font-label-numeric-sm">{lastCheckedSubtext}</span>
-                </span>
-                <span className="text-outline-variant hidden sm:inline">•</span>
-                <span className="text-on-surface-variant font-body-sm">
-                  Baseline comparison vs NIFTY 50 (-0.14%)
-                </span>
-              </div>
-            </div>
-
-            {/* Right: Prominent Checkpoint Action Button */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-shrink-0">
-              <button
-                className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-primary text-on-primary font-semibold rounded-DEFAULT hover:bg-primary-fixed shadow-md active:scale-95 transition-all text-body-md group"
-                onClick={handleMarkAllAsChecked}
-                title="Establish a fresh baseline at current spot prices"
-              >
-                <span className="material-symbols-outlined text-[19px]">done_all</span>
-                <span>Mark all as checked</span>
-                <kbd className="ml-1 px-1.5 py-0.5 rounded-DEFAULT bg-on-primary/20 text-on-primary text-[10px] font-label-numeric-sm tracking-wider uppercase">
-                  C
-                </kbd>
-              </button>
-            </div>
-          </div>
-
-          {/* Triage Breakdown & Filters */}
-          <div className="mt-5 pt-4 border-t border-outline-variant flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-secondary-container/40">
-                <span className="w-2 h-2 rounded-full bg-secondary"></span>
-                <span className="font-label-numeric-md text-label-numeric-md text-secondary font-bold">
-                  3 NEEDS ATTENTION
-                </span>
-                <span className="text-outline text-label-numeric-sm">(Score &gt; 75)</span>
-              </div>
-              <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-tertiary-container/40">
-                <span className="w-2 h-2 rounded-full bg-tertiary"></span>
-                <span className="font-label-numeric-md text-label-numeric-md text-tertiary font-bold">
-                  2 WORTH A LOOK
-                </span>
-                <span className="text-outline text-label-numeric-sm">(Score 40–74)</span>
-              </div>
-              <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-outline-variant">
-                <span className="w-2 h-2 rounded-full bg-outline"></span>
-                <span className="font-label-numeric-md text-label-numeric-md text-on-surface-variant font-medium">
-                  7 UNCHANGED / NO MOVE
-                </span>
-                <span className="text-outline text-label-numeric-sm">(Filtered noise &lt; ±0.4%)</span>
-              </div>
-            </div>
-
-            {/* Calm Guiding Principles */}
-            <div className="hidden xl:flex items-center space-x-4 text-label-numeric-sm text-outline">
-              <span className="flex items-center space-x-1">
-                <span className="text-primary">✓</span>
-                <span>Deterministic triage</span>
-              </span>
-              <span className="flex items-center space-x-1">
-                <span className="text-primary">✓</span>
-                <span>Zero noise flicker</span>
-              </span>
-              <span className="flex items-center space-x-1">
-                <span className="text-primary">✓</span>
-                <span>Verified catalysts</span>
-              </span>
-            </div>
-          </div>
-        </section>
-
-        {/* ========================================================================= */}
-        {/* VIEW CONTAINER A: NORMAL ACTIVE RANKED FEED (Default State)               */}
-        {/* ========================================================================= */}
-        {(appState === "live" || appState === "stale") && (
-          <div className="space-y-8">
-            {/* CATEGORY A: NEEDS ATTENTION */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse"></span>
-                  <h2 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
-                    Category A: Needs Attention (3)
-                  </h2>
-                  <span className="text-body-sm font-body-sm text-on-surface-variant">
-                    — Material price divergence, abnormal volume velocity, or verified regulatory catalyst
-                  </span>
-                </div>
-                <span className="text-label-numeric-sm font-label-numeric-sm text-outline">
-                  Sorted by Attention Delta (Desc)
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                {/* ITEM 1: RELIANCE */}
-                <article
-                  className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group"
-                  onClick={() => openDrawer("reliance")}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-headline-md font-headline-md font-bold text-on-surface">
-                          RELIANCE
-                        </span>
-                        <span className="text-body-sm font-body-sm text-outline">
-                          Reliance Industries Ltd. · NSE
-                        </span>
-                        <span className="px-2 py-0.5 rounded-DEFAULT bg-primary-container/15 text-primary border border-primary/30 font-label-numeric-sm text-label-numeric-sm font-semibold">
-                          Unusual Move &amp; Vol Spike
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
-                          Score: 86/100
-                        </span>
-                      </div>
-                      <div className="flex items-baseline space-x-3">
-                        <span className="text-headline-lg font-headline-lg font-bold text-on-surface font-label-numeric-lg text-label-numeric-lg">
-                          ₹1,468.20
-                        </span>
-                        <span className="text-primary font-label-numeric-md text-label-numeric-md font-bold flex items-center">
-                          <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
-                          +4.50% (+₹63.25) since last check
-                        </span>
-                        <span className="text-outline text-label-numeric-sm font-label-numeric-sm">
-                          (Checkpoint: ₹1,404.95 at 11:42 AM)
-                        </span>
-                      </div>
-                      <ul className="mt-2 space-y-1 text-body-md font-body-md text-on-surface">
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span>
-                            Price surged <strong>+4.5%</strong> breaking morning checkpoint resistance range (₹1,420).
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span>
-                            Trading velocity is <strong>2.7× checkpoint baseline</strong> (4.2M shares vs 1.55M 30-day baseline).
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span>
-                            Outperformed benchmark NIFTY 50 by <strong>+4.64% relative delta</strong> alpha.
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span className="text-on-surface-variant">
-                            Catalyst: Jio Tariff revision &amp; petrochemical margin guidance filed with BSE 45m ago.
-                          </span>
-                        </li>
-                      </ul>
-                    </div>
-                    <div className="flex flex-row md:flex-col items-end justify-between md:justify-start gap-3 flex-shrink-0">
-                      <div className="text-right">
-                        <span className="text-caption-caps font-caption-caps text-outline block">ALPHA VS NIFTY</span>
-                        <span className="font-label-numeric-md text-label-numeric-md text-primary font-bold">+3.10% net</span>
-                      </div>
-                      <button className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant group-hover:bg-primary group-hover:text-background text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant font-medium">
-                        <span>View Attention Breakdown</span>
-                        <span className="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
-                          arrow_forward
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-                </article>
-
-                {/* ITEM 2: TATAMOTORS */}
-                <article
-                  className="bg-surface-container border border-outline-variant hover:border-secondary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative"
-                  onClick={() => openDrawer("tatamotors")}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-headline-md font-headline-md font-bold text-on-surface">
-                          TATAMOTORS
-                        </span>
-                        <span className="text-body-sm font-body-sm text-outline">
-                          Tata Motors Passenger Vehicles · NSE
-                        </span>
-                        <span className="px-2 py-0.5 rounded-DEFAULT bg-secondary-container/30 text-secondary border border-secondary-container font-label-numeric-sm text-label-numeric-sm font-semibold">
-                          Abrupt Gap Down
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
-                          Score: 81/100
-                        </span>
-                      </div>
-                      <div className="flex items-baseline space-x-3">
-                        <span className="text-headline-lg font-headline-lg font-bold text-on-surface font-label-numeric-lg text-label-numeric-lg">
-                          ₹982.50
-                        </span>
-                        <span className="text-secondary font-label-numeric-md text-label-numeric-md font-bold flex items-center">
-                          <span className="material-symbols-outlined text-[16px]">arrow_downward</span>
-                          -3.80% (-₹38.80) since last check
-                        </span>
-                        <span className="text-outline text-label-numeric-sm font-label-numeric-sm">
-                          (Checkpoint: ₹1,021.30 at 11:42 AM)
-                        </span>
-                      </div>
-                      <ul className="mt-2 space-y-1 text-body-md font-body-md text-on-surface">
-                        <li className="flex items-start space-x-2">
-                          <span className="text-secondary font-bold">•</span>
-                          <span>
-                            Underperformed NIFTY Auto index by <strong>-4.20%</strong> during this 2h interval.
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-secondary font-bold">•</span>
-                          <span>
-                            Volume reached <strong>3.1× checkpoint velocity</strong> with heavy volume selling recorded.
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-secondary font-bold">•</span>
-                          <span className="text-on-surface-variant">
-                            Catalyst: Jaguar Land Rover (UK) reported temporary supply chain bottleneck for EU delivery lines.
-                          </span>
-                        </li>
-                      </ul>
-                    </div>
-                    <div className="flex flex-row md:flex-col items-end justify-between md:justify-start gap-3 flex-shrink-0">
-                      <div className="text-right">
-                        <span className="text-caption-caps font-caption-caps text-outline block">RELATIVE AUTO LAG</span>
-                        <span className="font-label-numeric-md text-label-numeric-md text-secondary font-bold">-4.20%</span>
-                      </div>
-                      <button className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant">
-                        <span>Inspect Factors</span>
-                        <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                      </button>
-                    </div>
-                  </div>
-                </article>
-
-                {/* ITEM 3: ZOMATO */}
-                <article
-                  className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative"
-                  onClick={() => openDrawer("zomato")}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-headline-md font-headline-md font-bold text-on-surface">
-                          ZOMATO
-                        </span>
-                        <span className="text-body-sm font-body-sm text-outline">
-                          Zomato Ltd. · NSE
-                        </span>
-                        <span className="px-2 py-0.5 rounded-DEFAULT bg-primary-container/15 text-primary border border-primary/30 font-label-numeric-sm text-label-numeric-sm font-semibold">
-                          Blinkit Expansion Momentum
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
-                          Score: 78/100
-                        </span>
-                      </div>
-                      <div className="flex items-baseline space-x-3">
-                        <span className="text-headline-lg font-headline-lg font-bold text-on-surface font-label-numeric-lg text-label-numeric-lg">
-                          ₹248.80
-                        </span>
-                        <span className="text-primary font-label-numeric-md text-label-numeric-md font-bold flex items-center">
-                          <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
-                          +6.20% (+₹14.50) since last check
-                        </span>
-                        <span className="text-outline text-label-numeric-sm font-label-numeric-sm">
-                          (Checkpoint: ₹234.30 at 11:42 AM)
-                        </span>
-                      </div>
-                      <ul className="mt-2 space-y-1 text-body-md font-body-md text-on-surface">
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span>
-                            Sustained buy-side block accumulation; break of historical all-time high resistance.
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span>
-                            Volume 2.4× normal checkpoint baseline with consistent positive delta order flow.
-                          </span>
-                        </li>
-                        <li className="flex items-start space-x-2">
-                          <span className="text-primary font-bold">•</span>
-                          <span className="text-on-surface-variant">
-                            Catalyst: Broker research revised Dark Store target count upwards to 1,200 by FY26.
-                          </span>
-                        </li>
-                      </ul>
-                    </div>
-                    <div className="flex flex-row md:flex-col items-end justify-between md:justify-start gap-3 flex-shrink-0">
-                      <div className="text-right">
-                        <span className="text-caption-caps font-caption-caps text-outline block">MOMENTUM INTENSITY</span>
-                        <span className="font-label-numeric-md text-label-numeric-md text-primary font-bold">Extreme</span>
-                      </div>
-                      <button className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant">
-                        <span>Inspect Factors</span>
-                        <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            {/* CATEGORY B: WORTH A LOOK */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-tertiary"></span>
-                  <h2 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
-                    Category B: Worth A Look (2)
-                  </h2>
-                  <span className="text-body-sm font-body-sm text-on-surface-variant">
-                    — Moderate divergence or sector drift without acute volume anomaly
-                  </span>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* TCS */}
-                <div className="bg-surface-container border border-outline-variant hover:border-outline rounded-DEFAULT p-4 transition-colors">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-headline-sm text-headline-sm text-on-surface font-bold">TCS</span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
-                          Score: 52/100
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-tertiary/10 text-tertiary border border-tertiary/20 text-label-numeric-sm font-label-numeric-sm">
-                          Moderate Drift
-                        </span>
-                      </div>
-                      <div className="mt-1 flex items-baseline space-x-2">
-                        <span className="font-label-numeric-md text-label-numeric-md font-bold text-on-surface">
-                          ₹3,412.00
-                        </span>
-                        <span className="font-label-numeric-sm text-label-numeric-sm text-secondary font-medium">
-                          -1.70% since checkpoint
-                        </span>
-                      </div>
-                    </div>
-                    <span className="text-label-numeric-sm font-label-numeric-sm text-outline">Vol: 1.1x</span>
-                  </div>
-                  <p className="mt-2 text-body-sm font-body-sm text-on-surface-variant">
-                    Underperformed NIFTY IT sector index by -0.9%. Steady orderly selling with absence of distinct news triggers.
-                  </p>
-                </div>
-
-                {/* BHARTI AIRTEL */}
-                <div className="bg-surface-container border border-outline-variant hover:border-outline rounded-DEFAULT p-4 transition-colors">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-headline-sm text-headline-sm text-on-surface font-bold">BHARTIARTL</span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
-                          Score: 46/100
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded-DEFAULT bg-primary/10 text-primary border border-primary/20 text-label-numeric-sm font-label-numeric-sm">
-                          Inflow Accumulation
-                        </span>
-                      </div>
-                      <div className="mt-1 flex items-baseline space-x-2">
-                        <span className="font-label-numeric-md text-label-numeric-md font-bold text-on-surface">
-                          ₹1,560.40
-                        </span>
-                        <span className="font-label-numeric-sm text-label-numeric-sm text-primary font-medium">
-                          +1.40% since checkpoint
-                        </span>
-                      </div>
-                    </div>
-                    <span className="text-label-numeric-sm font-label-numeric-sm text-outline">Vol: 1.0x</span>
-                  </div>
-                  <p className="mt-2 text-body-sm font-body-sm text-on-surface-variant">
-                    Steady incremental bidding in telecom sector basket post Reliance Jio announcement. Normal baseline turnover.
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            {/* CATEGORY C: UNCHANGED & NOISE FILTERED */}
-            <section className="bg-surface-container-low border border-outline-variant rounded-DEFAULT p-4 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-outline"></span>
-                  <h3 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
-                    Category C: Unchanged &amp; Noise Filtered (7)
-                  </h3>
-                </div>
-                <span className="text-body-sm font-body-sm text-outline font-label-numeric-sm">
-                  All 7 equities trading within standard ±0.35% noise band. No action required.
-                </span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-outline-variant">
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">INFY</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹1,542.10</span>
-                  <span className="text-primary font-label-numeric-sm text-label-numeric-sm mt-1">+0.20%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">HDFCBANK</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹1,812.00</span>
-                  <span className="text-primary font-label-numeric-sm text-label-numeric-sm mt-1">+0.05%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">ICICIBANK</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹1,240.50</span>
-                  <span className="text-secondary font-label-numeric-sm text-label-numeric-sm mt-1">-0.10%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">ITC</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹482.00</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm mt-1">0.00%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">LT</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹3,560.00</span>
-                  <span className="text-primary font-label-numeric-sm text-label-numeric-sm mt-1">+0.15%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">SUNPHARMA</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹1,680.00</span>
-                  <span className="text-secondary font-label-numeric-sm text-label-numeric-sm mt-1">-0.20%</span>
-                </div>
-                <div className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col">
-                  <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">KOTAKBANK</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm">₹1,745.20</span>
-                  <span className="text-outline font-label-numeric-sm text-label-numeric-sm mt-1">+0.08%</span>
-                </div>
-              </div>
-            </section>
+        {/* Loading / Error States */}
+        {loading && !data && (
+          <div className="p-12 text-center text-outline font-label-numeric-md">
+            Connecting to Smart Market Watch engine...
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* VIEW CONTAINER B: "YOU'RE ALL CAUGHT UP" STATE (Conditional State 3)      */}
-        {/* ========================================================================= */}
-        {appState === "caughtup" && (
-          <div className="bg-surface-container border border-outline-variant rounded-DEFAULT p-12 text-center space-y-4">
-            <div className="w-12 h-12 rounded-full bg-primary-container/20 text-primary border border-primary/40 flex items-center justify-center mx-auto">
-              <span className="material-symbols-outlined text-[28px]">verified</span>
-            </div>
-            <div className="space-y-1">
-              <h2 className="text-headline-md font-headline-md text-on-surface font-bold">
-                You&apos;re completely caught up
-              </h2>
-              <p className="text-body-md font-body-md text-on-surface-variant max-w-lg mx-auto">
-                No tracked equities have deviated outside their noise thresholds (&gt;0.40%) since your latest checkpoint established at <strong>{lastCheckedSubtext}</strong>.
-              </p>
-            </div>
-            <div className="pt-2 flex items-center justify-center space-x-3">
-              <button
-                className="px-4 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-label-numeric-sm font-label-numeric-sm"
-                onClick={() => setAppState("live")}
-              >
-                Simulate Market Shift →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* VIEW CONTAINER C: "FIRST VISIT / NEW USER" STATE (Conditional State 4)    */}
-        {/* ========================================================================= */}
-        {appState === "newuser" && (
-          <div className="bg-surface-container border border-outline-variant rounded-DEFAULT p-12 text-center space-y-6">
-            <div className="w-14 h-14 rounded-DEFAULT bg-surface-container-high border border-outline-variant text-primary flex items-center justify-center mx-auto">
-              <span className="material-symbols-outlined text-[32px]">flag</span>
-            </div>
-            <div className="space-y-2 max-w-xl mx-auto">
-              <h2 className="text-headline-lg font-headline-lg text-on-surface font-bold">
-                Establish Your Baseline Checkpoint
-              </h2>
-              <p className="text-body-md font-body-md text-on-surface-variant">
-                Smart Market Watch does not overwhelm you with continuous flickering green/red digits. We take a snapshot right now at <strong className="text-on-surface">T0</strong>, and only surface changes when prices meaningfully diverge, break volumes, or trigger verified catalysts.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto text-left">
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
-                  01. Snapshot
-                </span>
-                <span className="text-body-sm font-body-sm text-on-surface-variant">
-                  Current spot prices become your baseline reference anchor.
-                </span>
-              </div>
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
-                  02. Noise Filter
-                </span>
-                <span className="text-body-sm font-body-sm text-on-surface-variant">
-                  Standard market noise (±0.35%) is cleanly filtered out.
-                </span>
-              </div>
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
-                  03. Deterministic
-                </span>
-                <span className="text-body-sm font-body-sm text-on-surface-variant">
-                  Every alert surfaces verifiable math, volume multipliers, &amp; catalysts.
-                </span>
-              </div>
+        {error && (
+          <div className="p-4 bg-error-container/20 border border-error-container rounded-DEFAULT text-on-surface flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span className="material-symbols-outlined text-error">error</span>
+              <span>{error}</span>
             </div>
             <button
-              className="px-5 py-2.5 bg-on-surface text-background font-semibold rounded-DEFAULT hover:bg-white active:scale-95 transition-all text-body-md font-body-md"
-              onClick={() => setAppState("live")}
+              onClick={fetchRealSummary}
+              className="text-primary hover:underline font-label-numeric-sm text-label-numeric-sm"
             >
-              Take First Checkpoint Baseline Now (12 Equities)
+              Retry Connection →
             </button>
           </div>
+        )}
+
+        {data && (
+          <>
+            {/* 1. TEMPORAL HEADER & ATTENTION TRIAGE BAR */}
+            <section className="bg-surface-container-low border border-outline-variant rounded-DEFAULT p-5 relative overflow-hidden">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                {/* Left: Warm & Calm Briefing Headline */}
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-3">
+                    <span className="px-2 py-0.5 rounded-DEFAULT bg-primary/10 text-primary text-label-numeric-sm font-label-numeric-sm font-semibold border border-primary/20">
+                      WATCHLIST BRIEFING
+                    </span>
+                    <span className="text-body-sm text-outline-variant font-label-numeric-sm">
+                      {data.counts.total} Tracked Equities
+                    </span>
+                  </div>
+                  <h1 className="text-headline-xl font-headline-xl text-on-surface font-semibold tracking-tight leading-snug">
+                    What meaningfully changed while you were away?
+                  </h1>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-body-md font-body-md text-on-surface-variant pt-0.5">
+                    <span className="flex items-center space-x-1.5">
+                      <span className="material-symbols-outlined text-primary text-[18px]">schedule</span>
+                      <span className="text-on-surface font-medium">Last checked:</span>
+                      <strong className="text-primary font-label-numeric-md font-semibold">
+                        {data.timeAwayHuman}
+                      </strong>
+                      {data.lastCheckedAt && (
+                        <span className="text-outline font-label-numeric-sm">
+                          ({new Date(data.lastCheckedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })})
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-outline-variant hidden sm:inline">•</span>
+                    <span className="text-on-surface-variant font-body-sm">
+                      Baseline comparison vs NIFTY 50
+                    </span>
+                  </div>
+                </div>
+
+                {/* Right: Checkpoint Action Button */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-shrink-0">
+                  <button
+                    disabled={actionPending}
+                    className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-primary text-on-primary font-semibold rounded-DEFAULT hover:bg-primary-fixed shadow-md active:scale-95 transition-all text-body-md group disabled:opacity-50"
+                    onClick={handleMarkAllAsChecked}
+                    title="Establish a fresh baseline at current spot prices"
+                  >
+                    <span className="material-symbols-outlined text-[19px]">done_all</span>
+                    <span>{actionPending ? "Updating baseline..." : "Mark all as checked"}</span>
+                    <kbd className="ml-1 px-1.5 py-0.5 rounded-DEFAULT bg-on-primary/20 text-on-primary text-[10px] font-label-numeric-sm tracking-wider uppercase">
+                      C
+                    </kbd>
+                  </button>
+                </div>
+              </div>
+
+              {/* Triage Summary Badges */}
+              <div className="mt-5 pt-4 border-t border-outline-variant flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-secondary-container/40">
+                    <span className="w-2 h-2 rounded-full bg-secondary"></span>
+                    <span className="font-label-numeric-md text-label-numeric-md text-secondary font-bold">
+                      {data.counts.needsAttention} NEEDS ATTENTION
+                    </span>
+                    <span className="text-outline text-label-numeric-sm">(Score &gt; 60 or |Δ| &ge; 2.5%)</span>
+                  </div>
+                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-tertiary-container/40">
+                    <span className="w-2 h-2 rounded-full bg-tertiary"></span>
+                    <span className="font-label-numeric-md text-label-numeric-md text-tertiary font-bold">
+                      {data.counts.worthALook} WORTH A LOOK
+                    </span>
+                    <span className="text-outline text-label-numeric-sm">(Score 30–59 or |Δ| &ge; 1.0%)</span>
+                  </div>
+                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-outline-variant">
+                    <span className="w-2 h-2 rounded-full bg-outline"></span>
+                    <span className="font-label-numeric-md text-label-numeric-md text-on-surface-variant font-medium">
+                      {data.counts.unchanged} UNCHANGED / NO MOVE
+                    </span>
+                    <span className="text-outline text-label-numeric-sm">(Filtered noise &lt; ±1.0%)</span>
+                  </div>
+                </div>
+
+                {/* Guiding Principles */}
+                <div className="hidden xl:flex items-center space-x-4 text-label-numeric-sm text-outline">
+                  <span className="flex items-center space-x-1">
+                    <span className="text-primary">✓</span>
+                    <span>Deterministic triage</span>
+                  </span>
+                  <span className="flex items-center space-x-1">
+                    <span className="text-primary">✓</span>
+                    <span>Zero noise flicker</span>
+                  </span>
+                  <span className="flex items-center space-x-1">
+                    <span className="text-primary">✓</span>
+                    <span>Verified catalysts</span>
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            {/* FIRST VISIT STATE (If user has never established a checkpoint) */}
+            {data.isFirstVisit && (
+              <div className="bg-surface-container border border-outline-variant rounded-DEFAULT p-12 text-center space-y-6">
+                <div className="w-14 h-14 rounded-DEFAULT bg-surface-container-high border border-outline-variant text-primary flex items-center justify-center mx-auto">
+                  <span className="material-symbols-outlined text-[32px]">flag</span>
+                </div>
+                <div className="space-y-2 max-w-xl mx-auto">
+                  <h2 className="text-headline-lg font-headline-lg text-on-surface font-bold">
+                    Establish Your Baseline Checkpoint
+                  </h2>
+                  <p className="text-body-md font-body-md text-on-surface-variant">
+                    Smart Market Watch does not overwhelm you with continuous flickering green/red digits. We establish a snapshot right now at <strong className="text-on-surface">T0</strong>, and will only surface stocks when prices meaningfully diverge, break volumes, or trigger verified catalysts.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto text-left">
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
+                      01. Snapshot
+                    </span>
+                    <span className="text-body-sm font-body-sm text-on-surface-variant">
+                      Current spot prices become your baseline reference anchor.
+                    </span>
+                  </div>
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
+                      02. Noise Filter
+                    </span>
+                    <span className="text-body-sm font-body-sm text-on-surface-variant">
+                      Standard market noise (±0.35%) is cleanly filtered out.
+                    </span>
+                  </div>
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-primary font-label-numeric-sm text-label-numeric-sm font-bold block mb-1">
+                      03. Deterministic
+                    </span>
+                    <span className="text-body-sm font-body-sm text-on-surface-variant">
+                      Every alert surfaces verifiable math, volume multipliers, &amp; catalysts.
+                    </span>
+                  </div>
+                </div>
+                <button
+                  disabled={actionPending}
+                  className="px-5 py-2.5 bg-on-surface text-background font-semibold rounded-DEFAULT hover:bg-white active:scale-95 transition-all text-body-md font-body-md disabled:opacity-50"
+                  onClick={handleMarkAllAsChecked}
+                >
+                  {actionPending ? "Establishing baseline..." : "Take First Checkpoint Baseline Now"}
+                </button>
+              </div>
+            )}
+
+            {/* CAUGHT UP STATE (When 0 stocks require attention) */}
+            {!data.isFirstVisit &&
+              data.counts.needsAttention === 0 &&
+              data.counts.worthALook === 0 && (
+                <div className="bg-surface-container border border-outline-variant rounded-DEFAULT p-12 text-center space-y-4">
+                  <div className="w-12 h-12 rounded-full bg-primary-container/20 text-primary border border-primary/40 flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-[28px]">verified</span>
+                  </div>
+                  <div className="space-y-1">
+                    <h2 className="text-headline-md font-headline-md text-on-surface font-bold">
+                      You&apos;re completely caught up
+                    </h2>
+                    <p className="text-body-md font-body-md text-on-surface-variant max-w-lg mx-auto">
+                      None of your {data.counts.total} tracked equities have deviated outside their noise thresholds since your checkpoint ({data.timeAwayHuman}).
+                    </p>
+                  </div>
+                  <div className="pt-2 flex items-center justify-center space-x-3">
+                    <button
+                      className="px-4 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-label-numeric-sm font-label-numeric-sm"
+                      onClick={fetchDemoScenario}
+                    >
+                      Run Evaluator Demo Scenario →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            {/* ACTIVE RANKED FEED (When deltas exist) */}
+            {!data.isFirstVisit &&
+              (data.counts.needsAttention > 0 || data.counts.worthALook > 0) && (
+                <div className="space-y-8">
+                  {/* CATEGORY A: NEEDS ATTENTION */}
+                  {data.groups.needsAttention.length > 0 && (
+                    <section className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse"></span>
+                          <h2 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
+                            Category A: Needs Attention ({data.groups.needsAttention.length})
+                          </h2>
+                          <span className="text-body-sm font-body-sm text-on-surface-variant">
+                            — Material price divergence, abnormal volume velocity, or verified catalyst
+                          </span>
+                        </div>
+                        <span className="text-label-numeric-sm font-label-numeric-sm text-outline">
+                          Sorted by Attention Score (Desc)
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3">
+                        {data.groups.needsAttention.map((stock) => {
+                          const isPositive = stock.priceChangePct >= 0;
+                          const deltaAmount = stock.currentPrice - stock.checkpointPrice;
+                          return (
+                            <article
+                              key={stock.symbol}
+                              className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group"
+                              onClick={() => openDrawer(stock.symbol)}
+                            >
+                              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-headline-md font-headline-md font-bold text-on-surface">
+                                      {stock.symbol}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-DEFAULT bg-primary-container/15 text-primary border border-primary/30 font-label-numeric-sm text-label-numeric-sm font-semibold">
+                                      Attention Required
+                                    </span>
+                                    <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
+                                      Score: {stock.attentionScore}/100
+                                    </span>
+                                  </div>
+                                  <div className="flex items-baseline space-x-3">
+                                    <span className="text-headline-lg font-headline-lg font-bold text-on-surface font-label-numeric-lg text-label-numeric-lg">
+                                      ₹{stock.currentPrice.toFixed(2)}
+                                    </span>
+                                    <span
+                                      className={`font-label-numeric-md text-label-numeric-md font-bold flex items-center ${
+                                        isPositive ? "text-primary" : "text-secondary"
+                                      }`}
+                                    >
+                                      <span className="material-symbols-outlined text-[16px]">
+                                        {isPositive ? "arrow_upward" : "arrow_downward"}
+                                      </span>
+                                      {isPositive ? "+" : ""}
+                                      {stock.priceChangePct.toFixed(2)}% ({isPositive ? "+₹" : "-₹"}
+                                      {Math.abs(deltaAmount).toFixed(2)}) since checkpoint
+                                    </span>
+                                    <span className="text-outline text-label-numeric-sm font-label-numeric-sm">
+                                      (Checkpoint: ₹{stock.checkpointPrice.toFixed(2)})
+                                    </span>
+                                  </div>
+                                  {/* Reasons List */}
+                                  <ul className="mt-2 space-y-1 text-body-md font-body-md text-on-surface">
+                                    {stock.reasons.map((r, idx) => (
+                                      <li key={idx} className="flex items-start space-x-2">
+                                        <span className={`${isPositive ? "text-primary" : "text-secondary"} font-bold`}>
+                                          •
+                                        </span>
+                                        <span>
+                                          <strong>{r.label}:</strong> {r.value}
+                                        </span>
+                                      </li>
+                                    ))}
+                                    {stock.summaryExplanation && (
+                                      <li className="flex items-start space-x-2 text-on-surface-variant">
+                                        <span className="text-outline font-bold">•</span>
+                                        <span>{stock.summaryExplanation}</span>
+                                      </li>
+                                    )}
+                                  </ul>
+                                </div>
+                                <div className="flex flex-row md:flex-col items-end justify-between md:justify-start gap-3 flex-shrink-0">
+                                  <div className="text-right">
+                                    <span className="text-caption-caps font-caption-caps text-outline block">
+                                      ALPHA VS NIFTY
+                                    </span>
+                                    <span
+                                      className={`font-label-numeric-md text-label-numeric-md font-bold ${
+                                        stock.benchmarkAlphaPct !== null && stock.benchmarkAlphaPct >= 0
+                                          ? "text-primary"
+                                          : "text-secondary"
+                                      }`}
+                                    >
+                                      {stock.benchmarkAlphaPct !== null
+                                        ? `${stock.benchmarkAlphaPct >= 0 ? "+" : ""}${stock.benchmarkAlphaPct.toFixed(2)}% net`
+                                        : "N/A"}
+                                    </span>
+                                  </div>
+                                  <button className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant group-hover:bg-primary group-hover:text-background text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant font-medium">
+                                    <span>Inspect Factors</span>
+                                    <span className="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
+                                      arrow_forward
+                                    </span>
+                                  </button>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* CATEGORY B: WORTH A LOOK */}
+                  {data.groups.worthALook.length > 0 && (
+                    <section className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-tertiary"></span>
+                          <h2 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
+                            Category B: Worth A Look ({data.groups.worthALook.length})
+                          </h2>
+                          <span className="text-body-sm font-body-sm text-on-surface-variant">
+                            — Moderate divergence or benchmark drift
+                          </span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {data.groups.worthALook.map((stock) => {
+                          const isPositive = stock.priceChangePct >= 0;
+                          return (
+                            <div
+                              key={stock.symbol}
+                              className="bg-surface-container border border-outline-variant hover:border-outline rounded-DEFAULT p-4 transition-colors cursor-pointer"
+                              onClick={() => openDrawer(stock.symbol)}
+                            >
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <div className="flex items-center space-x-2">
+                                    <span className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                                      {stock.symbol}
+                                    </span>
+                                    <span className="px-1.5 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface font-label-numeric-sm text-label-numeric-sm">
+                                      Score: {stock.attentionScore}/100
+                                    </span>
+                                    <span className="px-1.5 py-0.5 rounded-DEFAULT bg-tertiary/10 text-tertiary border border-tertiary/20 text-label-numeric-sm font-label-numeric-sm">
+                                      Moderate Drift
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 flex items-baseline space-x-2">
+                                    <span className="font-label-numeric-md text-label-numeric-md font-bold text-on-surface">
+                                      ₹{stock.currentPrice.toFixed(2)}
+                                    </span>
+                                    <span
+                                      className={`font-label-numeric-sm text-label-numeric-sm font-medium ${
+                                        isPositive ? "text-primary" : "text-secondary"
+                                      }`}
+                                    >
+                                      {isPositive ? "+" : ""}
+                                      {stock.priceChangePct.toFixed(2)}% since checkpoint
+                                    </span>
+                                  </div>
+                                </div>
+                                <span className="text-label-numeric-sm font-label-numeric-sm text-outline">
+                                  {stock.volumeRatio !== null ? `Vol: ${stock.volumeRatio.toFixed(1)}x` : "Vol: N/A"}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-body-sm font-body-sm text-on-surface-variant">
+                                {stock.summaryExplanation || stock.reasons[0]?.value || "Observed price divergence from baseline."}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* CATEGORY C: UNCHANGED & NOISE FILTERED */}
+                  {data.groups.unchanged.length > 0 && (
+                    <section className="bg-surface-container-low border border-outline-variant rounded-DEFAULT p-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="w-2 h-2 rounded-full bg-outline"></span>
+                          <h3 className="text-headline-sm font-headline-sm text-on-surface uppercase tracking-wider font-semibold">
+                            Category C: Unchanged &amp; Noise Filtered ({data.groups.unchanged.length})
+                          </h3>
+                        </div>
+                        <span className="text-body-sm font-body-sm text-outline font-label-numeric-sm">
+                          All {data.groups.unchanged.length} equities trading within noise band. No action required.
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-outline-variant">
+                        {data.groups.unchanged.map((stock) => {
+                          const isPositive = stock.priceChangePct > 0;
+                          const isNegative = stock.priceChangePct < 0;
+                          return (
+                            <div
+                              key={stock.symbol}
+                              className="bg-surface p-2.5 rounded-DEFAULT border border-outline-variant flex flex-col cursor-pointer hover:border-outline"
+                              onClick={() => openDrawer(stock.symbol)}
+                            >
+                              <span className="text-on-surface font-label-numeric-sm text-label-numeric-sm font-bold">
+                                {stock.symbol}
+                              </span>
+                              <span className="text-outline font-label-numeric-sm text-label-numeric-sm">
+                                ₹{stock.currentPrice.toFixed(2)}
+                              </span>
+                              <span
+                                className={`font-label-numeric-sm text-label-numeric-sm mt-1 ${
+                                  isPositive ? "text-primary" : isNegative ? "text-secondary" : "text-outline"
+                                }`}
+                              >
+                                {isPositive ? "+" : ""}
+                                {stock.priceChangePct.toFixed(2)}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )}
+          </>
         )}
       </main>
 
@@ -966,167 +800,183 @@ export default function SmartMarketWatchPage() {
         ></div>
       )}
       <section
-        aria-label="Equities Factor Inspection Panel"
+        aria-label="Stock Change Factor Inspection Panel"
         className={`fixed inset-y-0 right-0 max-w-xl w-full bg-surface-container border-l border-outline-variant z-50 transform transition-transform duration-200 ease-in-out flex flex-col shadow-2xl ${
-          isDrawerOpen ? "translate-x-0" : "translate-x-full"
+          isDrawerOpen && selectedStock ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        {/* Drawer Header */}
-        <div className="p-5 border-b border-outline-variant flex items-start justify-between bg-surface">
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-headline-md font-headline-md font-bold text-on-surface">
-                {selectedStock.symbol}
-              </span>
-              <span className="px-2 py-0.5 rounded-DEFAULT bg-secondary-container/40 text-secondary border border-secondary-container font-label-numeric-sm text-label-numeric-sm font-bold">
-                Score: {selectedStock.score} / 100
-              </span>
-            </div>
-            <span className="text-body-sm font-body-sm text-outline font-label-numeric-sm">
-              NSE: {selectedStock.symbol} · {selectedStock.sector}
-            </span>
-          </div>
-          <button
-            className="w-8 h-8 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface-variant flex items-center justify-center transition-colors"
-            onClick={closeDrawer}
-          >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
-
-        {/* Drawer Body */}
-        <div className="p-6 space-y-6 overflow-y-auto flex-1">
-          {/* Timestamp Baseline Summary Bar */}
-          <div className="bg-surface p-4 rounded-DEFAULT border border-outline-variant">
-            <div className="flex items-center justify-between text-caption-caps font-caption-caps text-outline mb-2">
-              <span>BASELINE CHECKPOINT ({selectedStock.checkpointTime})</span>
-              <span className="material-symbols-outlined text-[14px]">arrow_right_alt</span>
-              <span>CURRENT READING (01:59 PM)</span>
-            </div>
-            <div className="flex items-center justify-between font-label-numeric-md text-label-numeric-md">
-              <div className="text-on-surface">
-                <span className="text-outline block text-caption-caps">Snapshot:</span>
-                <span>₹{selectedStock.checkpointPrice.toFixed(2)}</span>
-              </div>
-              <div className={`text-right font-bold ${selectedStock.deltaPct >= 0 ? "text-primary" : "text-secondary"}`}>
-                <span className="text-outline block text-caption-caps">Net Delta:</span>
-                <span>
-                  {selectedStock.deltaPct >= 0 ? "+" : ""}
-                  ₹{selectedStock.deltaAmount.toFixed(2)} ({selectedStock.deltaPct >= 0 ? "+" : ""}
-                  {selectedStock.deltaPct.toFixed(2)}%)
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* 4-Card Deterministic Fact Matrix */}
-          <div>
-            <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider block mb-2 font-bold">
-              Deterministic Fact Matrix
-            </span>
-            <div className="grid grid-cols-2 gap-2.5">
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-outline text-caption-caps font-caption-caps block">RELATIVE ALPHA</span>
-                <span
-                  className={`font-label-numeric-lg text-label-numeric-lg font-bold ${
-                    selectedStock.alpha >= 0 ? "text-primary" : "text-secondary"
-                  }`}
-                >
-                  {selectedStock.alpha >= 0 ? "+" : ""}
-                  {selectedStock.alpha.toFixed(2)}%
-                </span>
-                <span className="text-[11px] text-on-surface-variant block mt-0.5">vs NIFTY 50 (-0.14%)</span>
-              </div>
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-outline text-caption-caps font-caption-caps block">VOLUME ANOMALY</span>
-                <span className="text-primary font-label-numeric-lg text-label-numeric-lg font-bold">
-                  {selectedStock.volumeRatio}×
-                </span>
-                <span className="text-[11px] text-on-surface-variant block mt-0.5">
-                  Above normal baseline
-                </span>
-              </div>
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-outline text-caption-caps font-caption-caps block">TIME ELAPSED</span>
-                <span className="text-on-surface font-label-numeric-lg text-label-numeric-lg font-bold">
-                  {selectedStock.timeElapsed}
-                </span>
-                <span className="text-[11px] text-on-surface-variant block mt-0.5">Since last checkpoint</span>
-              </div>
-              <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
-                <span className="text-outline text-caption-caps font-caption-caps block">VERIFIED CATALYSTS</span>
-                <span className="text-primary font-label-numeric-lg text-label-numeric-lg font-bold">
-                  {selectedStock.catalystsCount} Filings
-                </span>
-                <span className="text-[11px] text-on-surface-variant block mt-0.5">BSE/NSE regulatory desk</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Summary & Deterministic Rationale */}
-          <div className="bg-surface p-4 rounded-DEFAULT border border-outline-variant space-y-2">
-            <div className="flex items-center space-x-1.5 text-label-numeric-sm font-label-numeric-sm text-primary">
-              <span className="material-symbols-outlined text-[16px]">analytics</span>
-              <span className="font-bold uppercase tracking-wider">Summary &amp; Analysis</span>
-            </div>
-            <p className="text-body-md font-body-md text-on-surface leading-relaxed">
-              &ldquo;{selectedStock.analystSynthesis}&rdquo;
-            </p>
-          </div>
-
-          {/* Observable Evidence Timeline */}
-          <div className="space-y-3">
-            <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider block font-bold">
-              Observable Sequence Timeline
-            </span>
-            <div className="border-l-2 border-outline-variant pl-4 space-y-4 ml-1">
-              {selectedStock.timeline.map((item, idx) => (
-                <div key={idx} className="relative">
-                  <span
-                    className={`absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full ${
-                      item.isHighlight ? "bg-primary" : "bg-outline"
-                    }`}
-                  ></span>
-                  <span
-                    className={`text-label-numeric-sm font-label-numeric-sm block ${
-                      item.isHighlight ? "text-primary" : "text-outline"
-                    }`}
-                  >
-                    {item.time}
+        {selectedStock && (
+          <>
+            {/* Drawer Header */}
+            <div className="p-5 border-b border-outline-variant flex items-start justify-between bg-surface">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-headline-md font-headline-md font-bold text-on-surface">
+                    {selectedStock.symbol}
                   </span>
-                  <span className="text-body-sm font-body-sm text-on-surface font-medium">
-                    {item.text}
+                  <span className="px-2 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface border border-outline-variant font-label-numeric-sm text-label-numeric-sm font-bold">
+                    Attention Score: {selectedStock.attentionScore} / 100
                   </span>
                 </div>
-              ))}
+                <span className="text-body-sm font-body-sm text-outline font-label-numeric-sm">
+                  NSE: {selectedStock.symbol} · Significance: {selectedStock.significance}
+                </span>
+              </div>
+              <button
+                className="w-8 h-8 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface-variant flex items-center justify-center transition-colors"
+                onClick={closeDrawer}
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
             </div>
-          </div>
-        </div>
 
-        {/* Drawer Footer Actions */}
-        <div className="p-4 border-t border-outline-variant bg-surface flex items-center justify-between gap-3">
-          <button
-            className="px-3 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-body-sm font-body-sm"
-            onClick={() => {
-              closeDrawer();
-              alert(`Updated baseline specifically for ${selectedStock.symbol}.`);
-            }}
-          >
-            Mark {selectedStock.symbol} as Checked Only
-          </button>
-          <button
-            className="px-4 py-2 rounded-DEFAULT bg-primary-container hover:bg-primary text-on-primary-container text-body-sm font-body-sm font-semibold transition-colors"
-            onClick={handleMarkAllAsChecked}
-          >
-            Mark All Watchlist Checked
-          </button>
-        </div>
+            {/* Drawer Body */}
+            <div className="p-6 space-y-6 overflow-y-auto flex-1">
+              {/* Timestamp Baseline Summary Bar */}
+              <div className="bg-surface p-4 rounded-DEFAULT border border-outline-variant">
+                <div className="flex items-center justify-between text-caption-caps font-caption-caps text-outline mb-2">
+                  <span>BASELINE CHECKPOINT</span>
+                  <span className="material-symbols-outlined text-[14px]">arrow_right_alt</span>
+                  <span>CURRENT SPOT PRICE</span>
+                </div>
+                <div className="flex items-center justify-between font-label-numeric-md text-label-numeric-md">
+                  <div className="text-on-surface">
+                    <span className="text-outline block text-caption-caps">Checkpoint Baseline:</span>
+                    <span>₹{selectedStock.checkpointPrice.toFixed(2)}</span>
+                  </div>
+                  <div
+                    className={`text-right font-bold ${
+                      selectedStock.priceChangePct >= 0 ? "text-primary" : "text-secondary"
+                    }`}
+                  >
+                    <span className="text-outline block text-caption-caps">Delta:</span>
+                    <span>
+                      {selectedStock.priceChangePct >= 0 ? "+" : ""}
+                      ₹{(selectedStock.currentPrice - selectedStock.checkpointPrice).toFixed(2)} (
+                      {selectedStock.priceChangePct >= 0 ? "+" : ""}
+                      {selectedStock.priceChangePct.toFixed(2)}%)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4-Card Deterministic Fact Matrix */}
+              <div>
+                <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider block mb-2 font-bold">
+                  Deterministic Fact Matrix
+                </span>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-outline text-caption-caps font-caption-caps block">RELATIVE ALPHA</span>
+                    <span
+                      className={`font-label-numeric-lg text-label-numeric-lg font-bold ${
+                        selectedStock.benchmarkAlphaPct !== null && selectedStock.benchmarkAlphaPct >= 0
+                          ? "text-primary"
+                          : "text-secondary"
+                      }`}
+                    >
+                      {selectedStock.benchmarkAlphaPct !== null
+                        ? `${selectedStock.benchmarkAlphaPct >= 0 ? "+" : ""}${selectedStock.benchmarkAlphaPct.toFixed(2)}%`
+                        : "N/A"}
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant block mt-0.5">vs NIFTY 50</span>
+                  </div>
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-outline text-caption-caps font-caption-caps block">VOLUME PACE</span>
+                    <span className="text-primary font-label-numeric-lg text-label-numeric-lg font-bold">
+                      {selectedStock.volumeRatio !== null ? `${selectedStock.volumeRatio.toFixed(1)}×` : "Baseline"}
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant block mt-0.5">vs checkpoint volume</span>
+                  </div>
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-outline text-caption-caps font-caption-caps block">TIME AWAY</span>
+                    <span className="text-on-surface font-label-numeric-lg text-label-numeric-lg font-bold">
+                      {data?.timeAwayHuman ?? "N/A"}
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant block mt-0.5">Since last checkpoint</span>
+                  </div>
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
+                    <span className="text-outline text-caption-caps font-caption-caps block">NEW EVENTS</span>
+                    <span className="text-primary font-label-numeric-lg text-label-numeric-lg font-bold">
+                      {selectedStock.newEventCount} Events
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant block mt-0.5">Detected catalysts</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Summary & Deterministic Rationale */}
+              <div className="bg-surface p-4 rounded-DEFAULT border border-outline-variant space-y-2">
+                <div className="flex items-center space-x-1.5 text-label-numeric-sm font-label-numeric-sm text-primary">
+                  <span className="material-symbols-outlined text-[16px]">analytics</span>
+                  <span className="font-bold uppercase tracking-wider">Summary &amp; Analysis</span>
+                </div>
+                <p className="text-body-md font-body-md text-on-surface leading-relaxed">
+                  {selectedStock.summaryExplanation ||
+                    `${selectedStock.symbol} has traded at ₹${selectedStock.currentPrice.toFixed(2)} with an Attention Score of ${selectedStock.attentionScore}/100.`}
+                </p>
+              </div>
+
+              {/* Observable Reasons Sequence */}
+              <div className="space-y-3">
+                <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider block font-bold">
+                  Deterministic Factors &amp; Reasons
+                </span>
+                <div className="space-y-2">
+                  {selectedStock.reasons.map((r, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 bg-surface rounded-DEFAULT border border-outline-variant flex items-center justify-between"
+                    >
+                      <div>
+                        <span className="text-caption-caps font-caption-caps text-outline block">
+                          {r.category}
+                        </span>
+                        <span className="text-body-sm font-body-sm text-on-surface font-medium">
+                          {r.label}
+                        </span>
+                      </div>
+                      <span
+                        className={`font-label-numeric-md font-bold ${
+                          r.significance === "HIGH"
+                            ? "text-secondary"
+                            : r.significance === "MEDIUM"
+                            ? "text-tertiary"
+                            : "text-outline"
+                        }`}
+                      >
+                        {r.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Drawer Footer Actions */}
+            <div className="p-4 border-t border-outline-variant bg-surface flex items-center justify-between gap-3">
+              <button
+                className="px-3 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-body-sm font-body-sm"
+                onClick={closeDrawer}
+              >
+                Close Panel
+              </button>
+              <button
+                disabled={actionPending}
+                className="px-4 py-2 rounded-DEFAULT bg-primary-container hover:bg-primary text-on-primary-container text-body-sm font-body-sm font-semibold transition-colors disabled:opacity-50"
+                onClick={handleMarkAllAsChecked}
+              >
+                Mark All Watchlist Checked
+              </button>
+            </div>
+          </>
+        )}
       </section>
 
       {/* ========================================================================= */}
       {/* DEMO SCENARIO EVALUATOR MODAL                                             */}
       {/* ========================================================================= */}
-      {isTimeTravelOpen && (
+      {isDemoModalOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-surface-container border border-outline-variant rounded-DEFAULT max-w-xl w-full p-6 space-y-5 shadow-2xl relative">
             <div className="flex items-center justify-between border-b border-outline-variant pb-3">
@@ -1138,7 +988,7 @@ export default function SmartMarketWatchPage() {
               </div>
               <button
                 className="text-outline hover:text-on-surface"
-                onClick={() => setIsTimeTravelOpen(false)}
+                onClick={() => setIsDemoModalOpen(false)}
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -1162,18 +1012,13 @@ export default function SmartMarketWatchPage() {
             <div className="flex items-center justify-end space-x-3 pt-2">
               <button
                 className="px-3 py-1.5 rounded-DEFAULT bg-surface-variant text-on-surface text-body-sm font-body-sm"
-                onClick={() => setIsTimeTravelOpen(false)}
+                onClick={() => setIsDemoModalOpen(false)}
               >
                 Close
               </button>
               <button
                 className="px-4 py-1.5 rounded-DEFAULT bg-primary text-on-primary text-body-sm font-body-sm font-semibold hover:bg-primary-fixed transition-all"
-                onClick={() => {
-                  setIsTimeTravelOpen(false);
-                  setAppState("live");
-                  setLastCheckedText("2 hours, 17 mins ago");
-                  setLastCheckedSubtext("(11:42 AM IST)");
-                }}
+                onClick={fetchDemoScenario}
               >
                 Simulate Scenario →
               </button>
@@ -1202,10 +1047,10 @@ export default function SmartMarketWatchPage() {
         <span>•</span>
         <span
           className="flex items-center space-x-1 cursor-pointer hover:text-on-surface"
-          onClick={() => setIsTimeTravelOpen(true)}
+          onClick={() => setIsDemoModalOpen(true)}
         >
-          <kbd className="px-1 bg-surface-container-high text-on-surface rounded">1-5</kbd>
-          <span>Demo States</span>
+          <kbd className="px-1 bg-surface-container-high text-on-surface rounded">Demo</kbd>
+          <span>Evaluator Scenario</span>
         </span>
       </div>
     </div>

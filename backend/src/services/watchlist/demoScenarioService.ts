@@ -1,12 +1,23 @@
 import { WatchlistSummaryResponse, WatchlistChangeItem } from "../../types/watchlistContract";
 import { calculateAttentionScore, computeEventContinuityKey } from "./attentionService";
 
-export function getDemoScenarioSummary(userId = "demo-evaluator"): WatchlistSummaryResponse {
-  const simulatedTimeAway = "2h 17m ago";
-  const simulatedLastCheckedAt = new Date(Date.now() - (2 * 3600 + 17 * 60) * 1000).toISOString();
+export function getDemoScenarioSummary(userId = "demo-evaluator", rawScenario = "big_move"): WatchlistSummaryResponse {
+  const norm = rawScenario.toLowerCase().replace(/[-_]/g, "");
+  let scenario: "baseline" | "big_move" | "volume_spike" | "stale" | "market_closed" | "unchanged" = "big_move";
 
-  // Deterministic Mock Scenario Items
-  const rawItems = [
+  if (norm === "baseline" || norm === "reset") scenario = "baseline";
+  else if (norm.includes("bigmove") || norm.includes("strongmove") || norm === "big") scenario = "big_move";
+  else if (norm.includes("volumespike") || norm.includes("volume") || norm.includes("spike")) scenario = "volume_spike";
+  else if (norm === "stale" || norm.includes("stalefeed")) scenario = "stale";
+  else if (norm.includes("closed") || norm.includes("marketclosed")) scenario = "market_closed";
+  else if (norm.includes("unchanged") || norm.includes("quiet") || norm.includes("flat")) scenario = "unchanged";
+
+  const simulatedTimeAway = scenario === "baseline" ? "Just now" : "2h 17m ago";
+  const simulatedLastCheckedAt = scenario === "baseline"
+    ? new Date().toISOString()
+    : new Date(Date.now() - (2 * 3600 + 17 * 60) * 1000).toISOString();
+
+  let rawItems = [
     {
       symbol: "RELIANCE",
       checkpointPrice: 2485.00,
@@ -45,6 +56,81 @@ export function getDemoScenarioSummary(userId = "demo-evaluator"): WatchlistSumm
     },
   ];
 
+  if (scenario === "baseline") {
+    rawItems = rawItems.map((r) => ({
+      ...r,
+      currentPrice: r.checkpointPrice,
+      currentVolume: r.checkpointVolume,
+      benchmarkAlphaPct: 0,
+      newEventCount: 0,
+    }));
+  } else if (scenario === "volume_spike") {
+    rawItems = [
+      {
+        symbol: "RELIANCE",
+        checkpointPrice: 2485.00,
+        currentPrice: 2514.80, // +1.20%
+        checkpointVolume: 1000000,
+        currentVolume: 2900000, // 2.90x volume pace
+        benchmarkAlphaPct: 1.00,
+        newEventCount: 0,
+      },
+      {
+        symbol: "TCS",
+        checkpointPrice: 3805.00,
+        currentPrice: 3870.00, // +1.71%
+        checkpointVolume: 500000,
+        currentVolume: 1410000, // 2.82x volume pace
+        benchmarkAlphaPct: 1.50,
+        newEventCount: 0,
+      },
+      {
+        symbol: "INFY",
+        checkpointPrice: 1520.00,
+        currentPrice: 1522.00,
+        checkpointVolume: 800000,
+        currentVolume: 820000,
+        benchmarkAlphaPct: 0.0,
+        newEventCount: 0,
+      },
+      {
+        symbol: "HDFCBANK",
+        checkpointPrice: 1620.00,
+        currentPrice: 1622.00,
+        checkpointVolume: 1200000,
+        currentVolume: 1220000,
+        benchmarkAlphaPct: 0.0,
+        newEventCount: 0,
+      },
+    ];
+  } else if (scenario === "unchanged") {
+    rawItems = rawItems.map((r) => ({
+      ...r,
+      currentPrice: Number((r.checkpointPrice * 1.0003).toFixed(2)),
+      currentVolume: Math.round(r.checkpointVolume * 1.01),
+      benchmarkAlphaPct: 0.02,
+      newEventCount: 0,
+    }));
+  }
+
+  let freshnessState: any = "LIVE";
+  let freshnessAge = 2;
+  let freshnessSession = "REGULAR_SESSION";
+  let freshnessOpen = true;
+  let freshnessNote = "Deterministic evaluation scenario active — 2h 17m elapsed simulation.";
+
+  if (scenario === "stale") {
+    freshnessState = "STALE";
+    freshnessAge = 75;
+    freshnessNote = "⚠️ Live market stream stale: no tick updates in 75s during active market session.";
+  } else if (scenario === "market_closed") {
+    freshnessState = "MARKET_CLOSED";
+    freshnessSession = "CLOSED";
+    freshnessOpen = false;
+    freshnessAge = 120;
+    freshnessNote = "Market closed — showing official session closing prices.";
+  }
+
   const changeItems: WatchlistChangeItem[] = rawItems.map((raw) => {
     const priceChangePct = Number((((raw.currentPrice - raw.checkpointPrice) / raw.checkpointPrice) * 100).toFixed(2));
     const volumeRatio = Number((raw.currentVolume / raw.checkpointVolume).toFixed(2));
@@ -77,7 +163,7 @@ export function getDemoScenarioSummary(userId = "demo-evaluator"): WatchlistSumm
       significance: evalResult.significance,
       reasons: evalResult.reasons,
       summaryExplanation: evalResult.summaryExplanation,
-      freshness: "LIVE",
+      freshness: freshnessState,
       observedAt: Date.now(),
       eventContinuityKey: continuityKey,
     };
@@ -95,12 +181,12 @@ export function getDemoScenarioSummary(userId = "demo-evaluator"): WatchlistSumm
     timeAwayHuman: simulatedTimeAway,
     checkpointItemCount: changeItems.length,
     marketFreshness: {
-      state: "LIVE",
-      session: "REGULAR_SESSION",
-      isOpen: true,
+      state: freshnessState,
+      session: freshnessSession,
+      isOpen: freshnessOpen,
       observedAt: Date.now(),
-      ageSeconds: 1,
-      note: "Deterministic evaluation scenario active — 2h 17m elapsed simulation.",
+      ageSeconds: freshnessAge,
+      note: freshnessNote,
     },
     counts: {
       total: changeItems.length,

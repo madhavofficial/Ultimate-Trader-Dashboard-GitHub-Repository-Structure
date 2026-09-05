@@ -21,6 +21,7 @@ export default function SmartMarketWatchPage() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const [actionPending, setActionPending] = useState(false);
+  const [selectedScenario, setSelectedScenario] = useState<string>("baseline");
 
   // Helper to fetch authorization header if user is logged in
   const getAuthHeaders = (): HeadersInit => {
@@ -79,7 +80,40 @@ export default function SmartMarketWatchPage() {
     }
   }, [fetchDemoScenario]);
 
-  // 3. CHECKPOINT: Acknowledge current spot prices and reset baseline
+  // 3. SCENARIO CONTROLLER: Trigger live scenario or parameterized fixture
+  const handleSelectScenario = useCallback(
+    async (scenarioName: string) => {
+      setSelectedScenario(scenarioName);
+      setLoading(true);
+      setError(null);
+      try {
+        await fetch(`${API_URL}/watchlist/scenario/${scenarioName}`, {
+          method: "POST",
+        });
+
+        const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+        if (mode === "REAL" && token) {
+          await fetchRealSummary();
+        } else {
+          const res = await fetch(`${API_URL}/watchlist/demo-scenario?scenario=${scenarioName}`, {
+            method: "POST",
+          });
+          if (res.ok) {
+            const json: WatchlistSummaryResponse = await res.json();
+            setData(json);
+            setMode("DEMO");
+          }
+        }
+      } catch (err: any) {
+        setError(err.message || "Failed to apply scenario");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [mode, fetchRealSummary]
+  );
+
+  // 4. CHECKPOINT: Acknowledge current spot prices and reset baseline
   const handleMarkAllAsChecked = useCallback(async () => {
     if (mode === "DEMO") {
       // In DEMO mode, simulate in-memory caught up state without touching production DB
@@ -235,28 +269,54 @@ export default function SmartMarketWatchPage() {
       {/* MODE INDICATOR / OPERATIONAL CONTROL BAR                                   */}
       {/* ========================================================================= */}
       <div className="w-full bg-surface-container-lowest border-b border-outline-variant px-gutter-desktop py-1.5 flex items-center justify-between text-caption-caps font-caption-caps text-outline">
-        <div className="flex items-center space-x-2">
-          <span className="font-bold text-on-surface">OPERATIONAL MODE:</span>
-          <button
-            onClick={fetchRealSummary}
-            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              mode === "REAL"
-                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            ● Real Mode (Live Backend)
-          </button>
-          <button
-            onClick={fetchDemoScenario}
-            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              mode === "DEMO"
-                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            ⚡ Demo Mode (Evaluator Scenario)
-          </button>
+        <div className="flex items-center space-x-3 flex-wrap gap-y-1">
+          <div className="flex items-center space-x-1.5">
+            <span className="font-bold text-on-surface">MODE:</span>
+            <button
+              onClick={fetchRealSummary}
+              className={`px-2 py-0.5 rounded-DEFAULT font-label-numeric-sm text-[11px] transition-all ${
+                mode === "REAL"
+                  ? "bg-surface-variant text-primary border border-outline-variant font-bold"
+                  : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
+              }`}
+            >
+              ● Real
+            </button>
+            <button
+              onClick={() => handleSelectScenario("big_move")}
+              className={`px-2 py-0.5 rounded-DEFAULT font-label-numeric-sm text-[11px] transition-all ${
+                mode === "DEMO"
+                  ? "bg-surface-variant text-primary border border-outline-variant font-bold"
+                  : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
+              }`}
+            >
+              ⚡ Demo
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-1 pl-3 border-l border-outline-variant">
+            <span className="font-bold text-on-surface">SCENARIO:</span>
+            {[
+              { id: "baseline", label: "Baseline" },
+              { id: "big_move", label: "Big Move" },
+              { id: "volume_spike", label: "Volume Spike" },
+              { id: "stale", label: "Stale Feed" },
+              { id: "market_closed", label: "Market Closed" },
+              { id: "unchanged", label: "Unchanged" },
+            ].map((sc) => (
+              <button
+                key={sc.id}
+                onClick={() => handleSelectScenario(sc.id)}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium tracking-normal transition-all ${
+                  selectedScenario === sc.id
+                    ? "bg-primary text-on-primary font-bold shadow-sm"
+                    : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-outline-variant/30"
+                }`}
+              >
+                {sc.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="hidden md:flex items-center space-x-3 text-label-numeric-sm">
           {mode === "DEMO" && (

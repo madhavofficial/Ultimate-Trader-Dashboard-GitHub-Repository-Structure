@@ -14,6 +14,33 @@ export function getAllLatestLtps() {
   return ltpMap;
 }
 
+export function injectScenarioTicks(
+  ticks: Array<{ symbol: string; price: number; volume?: number; timestamp?: number; source?: string }>,
+  io?: Server
+) {
+  for (const tick of ticks) {
+    const sym = tick.symbol.toUpperCase();
+    ltpMap.set(sym, {
+      price: tick.price,
+      timestamp: tick.timestamp ?? Date.now(),
+      source: tick.source ?? "scenario",
+      volume: tick.volume,
+    });
+  }
+  if (io) {
+    io.emit(
+      "tick",
+      ticks.map((t) => ({
+        symbol: t.symbol.toUpperCase(),
+        last_price: t.price,
+        volume: t.volume,
+        timestamp: t.timestamp ?? Date.now(),
+        source: t.source ?? "scenario",
+      }))
+    );
+  }
+}
+
 export async function updateLtpAndBroadcast(io: Server, ticks: IncomingTick[], onlyUserId?: string) {
   const tokenIds = ticks.map((tick) => tick.instrument_token ?? tick.token).filter((token): token is number => typeof token === "number");
   const tokenSymbols = tokenIds.length > 0 ? await symbolsForTokens(tokenIds) : new Map<number, string>();

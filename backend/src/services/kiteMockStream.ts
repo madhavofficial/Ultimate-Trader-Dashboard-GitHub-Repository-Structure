@@ -23,9 +23,48 @@ const mockInstruments = new Map<string, MockInstrument>([
   ["ITC", { token: 9, symbol: "ITC", price: 485, volume: 2100000, lastUpdated: Date.now() }],
   ["SBIN", { token: 10, symbol: "SBIN", price: 815, volume: 1300000, lastUpdated: Date.now() }],
   ["BHARTIARTL", { token: 11, symbol: "BHARTIARTL", price: 1530, volume: 640000, lastUpdated: Date.now() }],
+  ["NIFTY 50", { token: 999, symbol: "NIFTY 50", price: 24500, volume: 0, lastUpdated: Date.now() }],
 ]);
 
-let nextToken = 100;
+let nextToken = 1000;
+let mockStreamPaused = false;
+
+export function pauseMockStream() {
+  mockStreamPaused = true;
+}
+
+export function resumeMockStream() {
+  mockStreamPaused = false;
+}
+
+export function isMockStreamPaused(): boolean {
+  return mockStreamPaused;
+}
+
+export function setMockInstrumentState(
+  symbol: string,
+  state: { price?: number; volume?: number; lastUpdated?: number }
+) {
+  const upper = symbol.toUpperCase().trim();
+  const inst = mockInstruments.get(upper);
+  if (inst) {
+    if (typeof state.price === "number") inst.price = Number(state.price.toFixed(2));
+    if (typeof state.volume === "number") inst.volume = state.volume;
+    if (typeof state.lastUpdated === "number") inst.lastUpdated = state.lastUpdated;
+  } else {
+    mockInstruments.set(upper, {
+      token: nextToken++,
+      symbol: upper,
+      price: state.price ? Number(state.price.toFixed(2)) : 1000,
+      volume: state.volume ?? 100000,
+      lastUpdated: state.lastUpdated ?? Date.now(),
+    });
+  }
+}
+
+export function getAllMockInstruments(): Map<string, MockInstrument> {
+  return mockInstruments;
+}
 
 export async function registerMockSymbol(symbol: string, initialPrice?: number): Promise<MockInstrument> {
   const upper = symbol.toUpperCase().trim();
@@ -92,6 +131,8 @@ export function startMockKiteStream(io: Server) {
   void registerAllWatchlistAndHoldingSymbols();
 
   setInterval(() => {
+    if (mockStreamPaused) return;
+
     const now = Date.now();
     const ticks = Array.from(mockInstruments.values()).map((inst) => {
       const pctChange = (Math.random() - 0.495) * 0.003;

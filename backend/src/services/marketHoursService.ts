@@ -8,6 +8,16 @@ export interface MarketStatus {
   message: string;
 }
 
+let marketSessionOverride: MarketSession | null = null;
+
+export function setMarketSessionOverride(session: MarketSession | null) {
+  marketSessionOverride = session;
+}
+
+export function getMarketSessionOverride(): MarketSession | null {
+  return marketSessionOverride;
+}
+
 export function getCurrentMarketStatus(date = new Date()): MarketStatus {
   const parts = new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
@@ -23,6 +33,18 @@ export function getCurrentMarketStatus(date = new Date()): MarketStatus {
   const totalMinutes = hours * 60 + minutes;
 
   const istTimeString = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} IST`;
+
+  if (marketSessionOverride) {
+    const isOpen = marketSessionOverride === "REGULAR_SESSION" || marketSessionOverride === "PRE_MARKET";
+    return {
+      session: marketSessionOverride,
+      isOpen,
+      istTime: `${istTimeString} (Simulated)`,
+      message: isOpen
+        ? `Simulated ${marketSessionOverride} active for testing.`
+        : `Simulated ${marketSessionOverride} active for testing.`,
+    };
+  }
 
   // Weekend check
   if (day === 0 || day === 6) {

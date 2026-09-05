@@ -4,18 +4,53 @@ import { getWatchlistSummary } from "../services/watchlist/changeDetectionServic
 import { recordOrUpdateCheckpoint } from "../services/watchlist/snapshotService";
 import { getDemoScenarioSummary } from "../services/watchlist/demoScenarioService";
 
+import {
+  applyMarketScenario,
+  getCurrentScenarioName,
+} from "../services/watchlist/scenarioController";
+
 const router = Router();
 
 /**
  * POST & GET /watchlist/demo-scenario
  * Explicitly unauthenticated, demo-scoped evaluator endpoint.
  * - Operates entirely in-memory and isolated.
+ * - Supports scenario parameter: ?scenario=big_move | volume_spike | stale | market_closed | unchanged | baseline
  * - Does NOT access or query any real user database state.
  * - Does NOT mutate any checkpoints or watchlist items.
  */
-router.all("/demo-scenario", (_req: Request, res: Response) => {
-  const summary = getDemoScenarioSummary("demo-evaluator");
+router.all("/demo-scenario", (req: Request, res: Response) => {
+  const scenario = (req.query.scenario || req.body?.scenario || "big_move") as string;
+  const summary = getDemoScenarioSummary("demo-evaluator", scenario);
   return res.json(summary);
+});
+
+/**
+ * POST /watchlist/scenario/:name
+ * Explicitly unauthenticated scenario controller for live simulation testing.
+ * Updates ltpMap, market hours status, and mock feed controls to create living conditions.
+ */
+router.post(["/scenario", "/scenario/:name"], async (req: Request, res: Response) => {
+  try {
+    const name = req.params.name || req.body?.scenario || "baseline";
+    const io = req.app.get("io");
+    const result = await applyMarketScenario(name, io);
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err.message || "Failed to apply scenario" });
+  }
+});
+
+/**
+ * GET /watchlist/scenario
+ * Returns the currently active scenario and supported scenarios.
+ */
+router.get("/scenario", (_req: Request, res: Response) => {
+  return res.json({
+    ok: true,
+    activeScenario: getCurrentScenarioName(),
+    supportedScenarios: ["baseline", "big_move", "volume_spike", "stale", "market_closed", "unchanged"],
+  });
 });
 
 // All production routes below require strict, verified authentication

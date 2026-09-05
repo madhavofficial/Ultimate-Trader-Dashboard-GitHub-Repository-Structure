@@ -1,47 +1,29 @@
-import { Router, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
-import { AuthRequest } from "../middleware/authMiddleware";
+import { Router, Response, NextFunction, Request } from "express";
+import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { getWatchlistSummary } from "../services/watchlist/changeDetectionService";
 import { recordOrUpdateCheckpoint } from "../services/watchlist/snapshotService";
 import { getDemoScenarioSummary } from "../services/watchlist/demoScenarioService";
-import { prisma } from "../db/client";
-import { env } from "../config/env";
 
 const router = Router();
 
 /**
- * Flexible auth middleware for watchlist:
- * - If valid Bearer token provided, uses real authenticated user.
- * - If unauthenticated (evaluators, judges, or guest view), falls back to the database user or demo evaluator.
+ * POST & GET /watchlist/demo-scenario
+ * Explicitly unauthenticated, demo-scoped evaluator endpoint.
+ * - Operates entirely in-memory and isolated.
+ * - Does NOT access or query any real user database state.
+ * - Does NOT mutate any checkpoints or watchlist items.
  */
-async function watchlistAuth(req: AuthRequest, res: Response, next: NextFunction) {
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith("Bearer ")) {
-    try {
-      const token = auth.split(" ")[1];
-      const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as any;
-      req.user = { id: payload.sub, email: payload.email };
-      return next();
-    } catch {
-      // invalid token, fallback below
-    }
-  }
+router.all("/demo-scenario", (_req: Request, res: Response) => {
+  const summary = getDemoScenarioSummary("demo-evaluator");
+  return res.json(summary);
+});
 
-  // Graceful fallback for evaluator / guest preview without requiring prior login
-  const dbUser = await prisma.user.findFirst({ select: { id: true, email: true } });
-  if (dbUser) {
-    req.user = dbUser;
-  } else {
-    req.user = { id: "demo-evaluator", email: "demo@example.com" };
-  }
-  return next();
-}
-
-router.use(watchlistAuth);
+// All production routes below require strict, verified authentication
+router.use(authMiddleware);
 
 /**
  * GET /watchlist/summary (and alias /watchlist/changes)
- * Returns complete "What meaningfully changed while you were away" payload
+ * Returns complete "What meaningfully changed while you were away" payload for authenticated user
  */
 router.get(["/summary", "/changes"], async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -59,7 +41,7 @@ router.get(["/summary", "/changes"], async (req: AuthRequest, res: Response, nex
 
 /**
  * POST /watchlist/checkpoint
- * Meaning: "Mark all as checked" - records an atomic acknowledged checkpoint
+ * Meaning: "Mark all as checked" - records an atomic acknowledged checkpoint for authenticated user
  */
 router.post("/checkpoint", async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -73,15 +55,6 @@ router.post("/checkpoint", async (req: AuthRequest, res: Response, next: NextFun
   } catch (error) {
     return next(error);
   }
-});
-
-/**
- * POST /watchlist/demo-scenario
- * Evaluator demo endpoint to instantly experience what changed over a 2h absence
- */
-router.post("/demo-scenario", async (req: AuthRequest, res: Response) => {
-  const summary = getDemoScenarioSummary(req.user?.id ?? "demo-evaluator");
-  return res.json(summary);
 });
 
 export default router;

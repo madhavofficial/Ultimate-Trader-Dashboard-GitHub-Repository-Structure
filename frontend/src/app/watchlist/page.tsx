@@ -29,38 +29,13 @@ export default function SmartMarketWatchPage() {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  // 1. REAL MODE: Load live watchlist summary from backend
-  const fetchRealSummary = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_URL}/watchlist/summary`, {
-        headers: getAuthHeaders(),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to load watchlist summary (${res.status})`);
-      }
-      const json: WatchlistSummaryResponse = await res.json();
-      setData(json);
-      setMode("REAL");
-    } catch (err: any) {
-      setError(err.message || "Failed to connect to backend market service");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // 2. DEMO MODE: Load deterministic evaluator scenario from backend
+  // 1. DEMO MODE: Load deterministic evaluator scenario from backend (unauthenticated endpoint)
   const fetchDemoScenario = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(`${API_URL}/watchlist/demo-scenario`, {
         method: "POST",
-        headers: {
-          ...getAuthHeaders(),
-          "Content-Type": "application/json",
-        },
       });
       if (!res.ok) {
         throw new Error(`Failed to load demo scenario (${res.status})`);
@@ -76,8 +51,73 @@ export default function SmartMarketWatchPage() {
     }
   }, []);
 
+  // 2. REAL MODE: Load live watchlist summary from backend (requires authenticated user)
+  const fetchRealSummary = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const headers = getAuthHeaders();
+      const res = await fetch(`${API_URL}/watchlist/summary`, {
+        headers,
+      });
+      if (res.status === 401) {
+        // Not authenticated: notify and switch to Demo Mode
+        setError("Unauthenticated: Please log in to view personal watchlists. Switched to Evaluator Demo Mode.");
+        await fetchDemoScenario();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`Failed to load watchlist summary (${res.status})`);
+      }
+      const json: WatchlistSummaryResponse = await res.json();
+      setData(json);
+      setMode("REAL");
+    } catch (err: any) {
+      setError(err.message || "Failed to connect to backend market service");
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchDemoScenario]);
+
   // 3. CHECKPOINT: Acknowledge current spot prices and reset baseline
   const handleMarkAllAsChecked = useCallback(async () => {
+    if (mode === "DEMO") {
+      // In DEMO mode, simulate in-memory caught up state without touching production DB
+      if (!data) return;
+      const all = [
+        ...data.groups.needsAttention,
+        ...data.groups.worthALook,
+        ...data.groups.unchanged,
+      ].map((s) => ({
+        ...s,
+        priceChangePct: 0,
+        attentionScore: 0,
+        significance: "UNCHANGED" as const,
+        reasons: [],
+        summaryExplanation: "Baseline checkpoint established.",
+      }));
+
+      setData({
+        ...data,
+        lastCheckedAt: new Date().toISOString(),
+        timeAwayHuman: "Just now",
+        counts: {
+          total: all.length,
+          needsAttention: 0,
+          worthALook: 0,
+          unchanged: all.length,
+        },
+        groups: {
+          needsAttention: [],
+          worthALook: [],
+          unchanged: all,
+        },
+      });
+      setIsDrawerOpen(false);
+      return;
+    }
+
+    // In REAL mode, call authenticated POST /watchlist/checkpoint
     setActionPending(true);
     try {
       const res = await fetch(`${API_URL}/watchlist/checkpoint`, {
@@ -88,6 +128,9 @@ export default function SmartMarketWatchPage() {
         },
       });
       if (!res.ok) {
+        if (res.status === 401) {
+          throw new Error("Please log in to save a personal baseline checkpoint.");
+        }
         throw new Error(`Failed to record checkpoint (${res.status})`);
       }
       setIsDrawerOpen(false);
@@ -98,12 +141,17 @@ export default function SmartMarketWatchPage() {
     } finally {
       setActionPending(false);
     }
-  }, [fetchRealSummary]);
+  }, [mode, data, fetchRealSummary]);
 
-  // Initial mount: load real watchlist summary
+  // Initial mount: load real summary if token present, otherwise default to demo mode
   useEffect(() => {
-    fetchRealSummary();
-  }, [fetchRealSummary]);
+    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+    if (token) {
+      fetchRealSummary();
+    } else {
+      fetchDemoScenario();
+    }
+  }, [fetchRealSummary, fetchDemoScenario]);
 
   // Flatten all items across groups for quick lookup in detail drawer
   const allStocks = useMemo(() => {

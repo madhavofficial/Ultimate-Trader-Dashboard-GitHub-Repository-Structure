@@ -315,9 +315,10 @@ Return ONLY valid JSON matching this schema:
   "reasoning": "Reasoning summary."
 }`;
 
-  // 1. Try Groq (Llama-3.3-70b-versatile)
+  // 1. Try Open Source LLM / Groq (openai-oss-120b)
   if (process.env.GROQ_API_KEY) {
     try {
+      const model = process.env.GROQ_MODEL || "openai-oss-120b";
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -328,7 +329,7 @@ Return ONLY valid JSON matching this schema:
           Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
+          model,
           messages: [
             { role: "system", content: "You are an expert Indian stock market quantitative analyst. Respond with pure JSON." },
             { role: "user", content: prompt },
@@ -346,7 +347,7 @@ Return ONLY valid JSON matching this schema:
           const parsed = llmOutputSchema.parse(JSON.parse(content));
           return {
             title,
-            source: "LLM_GROQ",
+            source: `LLM_${model.toUpperCase().replace(/[-/.]/g, "_")}`,
             summary: summary.slice(0, 300),
             eventType: parsed.eventType,
             primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
@@ -360,16 +361,17 @@ Return ONLY valid JSON matching this schema:
         }
       }
     } catch (err) {
-      console.warn("Groq sentiment extraction failed:", err);
+      console.warn("Groq/OSS sentiment extraction failed:", err);
     }
   }
 
-  // 2. Try Gemini Flash
+  // 2. Try Gemini (gemini-3.8-flash)
   if (process.env.GEMINI_API_KEY) {
     try {
+      const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`, {
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -387,7 +389,7 @@ Return ONLY valid JSON matching this schema:
           const parsed = llmOutputSchema.parse(JSON.parse(rawJson));
           return {
             title,
-            source: "LLM_GEMINI",
+            source: `LLM_${model.toUpperCase().replace(/[-/.]/g, "_")}`,
             summary: summary.slice(0, 300),
             eventType: parsed.eventType,
             primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
@@ -405,9 +407,10 @@ Return ONLY valid JSON matching this schema:
     }
   }
 
-  // 3. Try OpenAI
+  // 3. Try OpenAI (gpt-5.6-luna-medium)
   if (process.env.OPENAI_API_KEY) {
     try {
+      const model = process.env.OPENAI_MODEL || "gpt-5.6-luna-medium";
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -418,7 +421,7 @@ Return ONLY valid JSON matching this schema:
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model,
           messages: [
             { role: "system", content: "You are an expert Indian financial analyst. Output pure JSON." },
             { role: "user", content: prompt },
@@ -436,7 +439,7 @@ Return ONLY valid JSON matching this schema:
           const parsed = llmOutputSchema.parse(JSON.parse(content));
           return {
             title,
-            source: "LLM_OPENAI",
+            source: `LLM_${model.toUpperCase().replace(/[-/.]/g, "_")}`,
             summary: summary.slice(0, 300),
             eventType: parsed.eventType,
             primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],

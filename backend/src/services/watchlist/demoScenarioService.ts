@@ -90,6 +90,7 @@ export function getDemoScenarioSummary(userId = "demo-evaluator"): WatchlistSumm
   return {
     ok: true,
     userId,
+    isFirstVisit: false,
     lastCheckedAt: simulatedLastCheckedAt,
     timeAwayHuman: simulatedTimeAway,
     checkpointItemCount: changeItems.length,

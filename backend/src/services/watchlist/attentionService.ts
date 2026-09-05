@@ -94,9 +94,16 @@ export function calculateAttentionScore(factors: AttentionFactors): AttentionEva
       category: "VOLUME",
       label: factors.volumeRatio >= 1.5 
         ? `Volume pace is ${ratioStr} since checkpoint` 
-        : `Volume pace unchanged (${ratioStr} vs checkpoint)`,
+        : `Volume pace steady (${ratioStr} vs checkpoint)`,
       value: ratioStr,
       significance: factors.volumeRatio >= 2.0 ? "HIGH" : factors.volumeRatio >= 1.3 ? "MEDIUM" : "NEUTRAL",
+    });
+  } else {
+    reasons.push({
+      category: "VOLUME",
+      label: "Checkpoint volume baseline unavailable",
+      value: "N/A",
+      significance: "NEUTRAL",
     });
   }
 
@@ -132,12 +139,16 @@ export function calculateAttentionScore(factors: AttentionFactors): AttentionEva
 
   // Concise synthesized explanation
   let summary = "";
+  const volSummary = typeof factors.volumeRatio === "number" && factors.volumeRatio > 0
+    ? `checkpoint volume pace ${factors.volumeRatio.toFixed(1)}×`
+    : "steady activity";
+
   if (significance === "NEEDS_ATTENTION") {
-    summary = `Significant movement of ${priceFormatted} with elevated checkpoint volume pace (${factors.volumeRatio ? factors.volumeRatio.toFixed(1) + "×" : "steady"})${factors.newEventCount > 0 ? ` and ${factors.newEventCount} new catalyst(s)` : ""}.`;
+    summary = `Significant movement of ${priceFormatted} with ${volSummary}${factors.newEventCount > 0 ? ` and ${factors.newEventCount} new catalyst(s)` : ""}.`;
   } else if (significance === "WORTH_A_LOOK") {
     summary = `Moderate shift of ${priceFormatted} relative to recent baseline.`;
   } else {
-    summary = `Price and volume remained steady (${priceFormatted}) since last check.`;
+    summary = `Price remained steady (${priceFormatted}) since last check.`;
   }
 
   return {
@@ -154,8 +165,14 @@ export function calculateAttentionScore(factors: AttentionFactors): AttentionEva
   };
 }
 
+/**
+ * Computes a deterministic response signature used for client/downstream alert deduplication.
+ * Bucketing price change to 0.5% intervals prevents spamming new event alerts across sub-tick noise
+ * while preserving clear discrete event identity.
+ * Note: This produces a stable signature for client-side and webhook deduplication; it does not
+ * mutate or claim historical server-side event persistence.
+ */
 export function computeEventContinuityKey(symbol: string, significance: ChangeSignificance, priceChangePct: number, newEventCount: number): string {
-  // Bucketing price change to 0.5% intervals prevents spamming new event IDs on sub-tick movements
   const bucketedChange = (Math.round(priceChangePct * 2) / 2).toFixed(1);
   return `${symbol.toUpperCase()}:${significance}:${bucketedChange}:${newEventCount}`;
 }

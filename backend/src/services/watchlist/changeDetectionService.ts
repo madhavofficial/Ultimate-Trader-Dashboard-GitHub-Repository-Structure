@@ -7,7 +7,7 @@ import {
   countEventsForSymbol,
   recordOrUpdateCheckpoint,
 } from "./snapshotService";
-import { evaluateQuoteFreshness, getGlobalMarketFreshness } from "./freshnessService";
+import { evaluateQuoteFreshness, determineGlobalFreshness } from "./freshnessService";
 import {
   calculateAttentionScore,
   computeEventContinuityKey,
@@ -18,7 +18,7 @@ import {
 } from "../../types/watchlistContract";
 
 export function formatTimeAway(lastCheckedAt: Date | null, now = new Date()): string {
-  if (!lastCheckedAt) return "Initial baseline";
+  if (!lastCheckedAt) return "First visit — tracking baseline established";
   const diffMs = Math.max(0, now.getTime() - lastCheckedAt.getTime());
   const diffMinutes = Math.floor(diffMs / (60 * 1000));
 
@@ -40,10 +40,9 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     getUserCheckpoint(userId),
   ]);
 
-  const globalFreshness = getGlobalMarketFreshness();
   const currentBenchmarkPrice = await getBenchmarkPrice();
 
-  // If user has never acknowledged a checkpoint, initialize it transparently
+  // First visit behavior: If user has never acknowledged a checkpoint, establish initial baseline
   let checkpoint = existingCheckpoint;
   let isFirstVisit = false;
   if (!checkpoint) {
@@ -58,6 +57,7 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     : null;
 
   const changeItems: WatchlistChangeItem[] = [];
+  const observedTimestamps: number[] = [];
 
   for (const item of watchlistItems) {
     const symbol = item.symbol.toUpperCase();
@@ -65,7 +65,16 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
 
     if (!ltp) {
       const mockInst = await registerMockSymbol(symbol);
-      ltp = { price: mockInst.price, timestamp: mockInst.lastUpdated, source: "mock" };
+      ltp = {
+        price: mockInst.price,
+        timestamp: mockInst.lastUpdated,
+        source: "mock",
+        volume: mockInst.volume,
+      };
+    }
+
+    if (ltp.timestamp) {
+      observedTimestamps.push(ltp.timestamp);
     }
 
     const freshness = evaluateQuoteFreshness(ltp.timestamp);
@@ -74,20 +83,52 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     const currentPrice = ltp.price;
     const checkpointPrice = cpItem ? Number(cpItem.price) : currentPrice;
 
-    // Price change percentage calculation
+    // Actual observed volume (or null if unavailable)
+    const currentVolume = typeof ltp.volume === "number" && ltp.volume > 0 ? ltp.volume : null;
+    const checkpointVolume = cpItem && Number(cpItem.volume) > 0 ? Number(cpItem.volume) : null;
+
+    if (isFirstVisit) {
+      // First visit: Clear baseline communication with 0 historical deltas
+      const continuityKey = computeEventContinuityKey(symbol, "UNCHANGED", 0, 0);
+      changeItems.push({
+        symbol,
+        currentPrice,
+        checkpointPrice: currentPrice,
+        priceChangePct: 0,
+        currentVolume,
+        checkpointVolume: currentVolume,
+        volumeRatio: null,
+        benchmarkAlphaPct: null,
+        newEventCount: 0,
+        attentionScore: 0,
+        significance: "UNCHANGED",
+        reasons: [
+          {
+            category: "PRICE",
+            label: "Initial tracking baseline recorded; changes will be measured on your return",
+            value: "0.00%",
+            significance: "NEUTRAL",
+          },
+        ],
+        summaryExplanation: "Initial tracking baseline recorded. Changes will be highlighted when you return.",
+        freshness: freshness.state,
+        observedAt: ltp.timestamp || Date.now(),
+        eventContinuityKey: continuityKey,
+      });
+      continue;
+    }
+
+    // Subsequent return visit: Calculate real deltas against acknowledged checkpoint
     const priceChangePct = checkpointPrice > 0
       ? Number((((currentPrice - checkpointPrice) / checkpointPrice) * 100).toFixed(2))
       : 0;
 
-    // Volume ratio calculation (honest volume pace relative to checkpoint observation)
-    const checkpointVolume = cpItem ? Number(cpItem.volume) : 100000;
-    // Current observed volume based on turnover/time
-    const currentVolume = checkpointVolume > 0 ? checkpointVolume : 100000;
-    const volumeRatio = (checkpointVolume > 0 && currentVolume > 0)
+    // Honest volume pace ratio (strictly null if either volume observation is missing or zero)
+    const volumeRatio = (checkpointVolume !== null && currentVolume !== null && checkpointVolume > 0)
       ? Number((currentVolume / checkpointVolume).toFixed(2))
       : null;
 
-    // Benchmark Alpha: stock % change minus NIFTY 50 % change
+    // Benchmark Alpha: stock % change minus NIFTY 50 % change (strictly null if benchmark is missing)
     const benchmarkAlphaPct = typeof benchmarkChangePct === "number"
       ? Number((priceChangePct - benchmarkChangePct).toFixed(2))
       : null;
@@ -146,19 +187,27 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
     .filter((i) => i.significance === "UNCHANGED")
     .sort((a, b) => a.symbol.localeCompare(b.symbol));
 
+  // Determine global market freshness honestly based on actual quote observations
+  const globalFreshnessEval = determineGlobalFreshness(observedTimestamps);
+
   return {
     ok: true,
     userId,
+    isFirstVisit,
     lastCheckedAt: checkpoint?.lastCheckedAt ? checkpoint.lastCheckedAt.toISOString() : null,
-    timeAwayHuman: isFirstVisit ? "Initial baseline" : formatTimeAway(checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : null),
+    timeAwayHuman: isFirstVisit
+      ? "First visit — tracking baseline established"
+      : formatTimeAway(checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : null),
     checkpointItemCount: checkpointMap.size,
     marketFreshness: {
-      state: globalFreshness.isOpen ? "LIVE" : "MARKET_CLOSED",
-      session: globalFreshness.session,
-      isOpen: globalFreshness.isOpen,
-      observedAt: Date.now(),
-      ageSeconds: 0,
-      note: globalFreshness.message,
+      state: globalFreshnessEval.state,
+      session: globalFreshnessEval.note.includes("(") ? globalFreshnessEval.note.split("(")[1].split(")")[0] : "MARKET",
+      isOpen: globalFreshnessEval.state === "LIVE" || globalFreshnessEval.state === "DELAYED",
+      observedAt: globalFreshnessEval.observedAt,
+      ageSeconds: globalFreshnessEval.ageSeconds,
+      note: isFirstVisit
+        ? "Initial baseline established — return later to see what meaningfully changed."
+        : globalFreshnessEval.note,
     },
     counts: {
       total: changeItems.length,

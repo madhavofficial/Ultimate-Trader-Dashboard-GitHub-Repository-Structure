@@ -48,11 +48,11 @@ export async function getBenchmarkPrice(): Promise<number | null> {
       return Number(inst.lastPrice);
     }
   } catch {
-    // Graceful fallback
+    // Database lookup failure falls back gracefully
   }
 
-  // Anchor fallback for NIFTY 50 benchmark baseline
-  return 24500.00;
+  // Missing benchmark data must remain null per requirement
+  return null;
 }
 
 export async function captureCurrentWatchlistState(userId: string): Promise<CapturedSymbolState[]> {
@@ -72,24 +72,13 @@ export async function captureCurrentWatchlistState(userId: string): Promise<Capt
 
     if (!ltp) {
       const mockInst = await registerMockSymbol(upper);
-      ltp = { price: mockInst.price, timestamp: mockInst.lastUpdated, source: "mock" };
+      ltp = { price: mockInst.price, timestamp: mockInst.lastUpdated, source: "mock", volume: mockInst.volume };
     }
 
     const eventCount = await countEventsForSymbol(upper);
 
-    // Precise volume tracking: Use existing observed volume or fallback to deterministic baseline
-    let volumeBigInt = BigInt(100000);
-    try {
-      const inst = await prisma.instrument.findFirst({
-        where: { tradingsymbol: upper, exchange: "NSE" },
-        select: { lotSize: true },
-      });
-      if (inst?.lotSize) {
-        volumeBigInt = BigInt(inst.lotSize * 5000);
-      }
-    } catch {
-      // Keep baseline volume
-    }
+    // Actual observed volume or 0 if unavailable
+    const volumeBigInt = typeof ltp.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
 
     states.push({
       symbol: upper,

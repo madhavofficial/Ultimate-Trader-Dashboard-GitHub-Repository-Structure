@@ -36,8 +36,9 @@ export interface WatchlistChangeItem {
 export interface WatchlistSummaryResponse {
   ok: boolean;
   userId: string;
+  isFirstVisit: boolean;
   lastCheckedAt: string | null;     // ISO timestamp or null if first visit
-  timeAwayHuman: string;            // e.g. "2h 17m" or "Initial baseline"
+  timeAwayHuman: string;            // e.g. "2h 17m ago" or "First visit — baseline established"
   checkpointItemCount: number;
   marketFreshness: {
     state: MarketFreshnessState;

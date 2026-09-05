@@ -199,9 +199,52 @@ test("demo scenario service produces deterministic isolated evaluation", () => {
 });
 
 test("formatTimeAway produces clean human durations", () => {
-  assert.equal(formatTimeAway(null), "Initial baseline");
+  assert.equal(formatTimeAway(null), "First visit — tracking baseline established");
   const now = new Date("2026-09-05T12:00:00Z");
   assert.equal(formatTimeAway(new Date("2026-09-05T11:59:45Z"), now), "Just now");
   assert.equal(formatTimeAway(new Date("2026-09-05T11:15:00Z"), now), "45m ago");
   assert.equal(formatTimeAway(new Date("2026-09-05T09:43:00Z"), now), "2h 17m ago");
 });
+
+test("regression: unavailable volume ratio returns null and honest baseline unavailable reason", () => {
+  const result = calculateAttentionScore({
+    priceChangePct: 1.5,
+    volumeRatio: null,
+    benchmarkAlphaPct: 0.5,
+    newEventCount: 0,
+  });
+
+  const volReason = result.reasons.find((r) => r.category === "VOLUME");
+  assert.ok(volReason);
+  assert.equal(volReason.value, "N/A");
+  assert.match(volReason.label, /Checkpoint volume baseline unavailable/i);
+  assert.equal(result.factorsNormalized.volume, 0);
+});
+
+test("regression: global freshness accurately flags DATA_UNAVAILABLE when market open but 0 feeds exist", () => {
+  const { determineGlobalFreshness } = require("../src/services/watchlist/freshnessService");
+  // Monday at 11:00 AM IST (regular trading hours)
+  const mondayTradingTime = new Date("2026-09-07T05:30:00Z").getTime();
+  const res = determineGlobalFreshness([], mondayTradingTime);
+  assert.equal(res.state, "DATA_UNAVAILABLE");
+  assert.equal(res.canEvaluateConfidently, false);
+});
+
+test("regression: global freshness accurately flags LIVE when feeds are <5s old during open session", () => {
+  const { determineGlobalFreshness } = require("../src/services/watchlist/freshnessService");
+  const mondayTradingTime = new Date("2026-09-07T05:30:00Z").getTime();
+  const quotes = [mondayTradingTime - 2000, mondayTradingTime - 1000];
+  const res = determineGlobalFreshness(quotes, mondayTradingTime);
+  assert.equal(res.state, "LIVE");
+  assert.equal(res.canEvaluateConfidently, true);
+});
+
+test("regression: global freshness accurately flags STALE when feeds are >30s old during open session", () => {
+  const { determineGlobalFreshness } = require("../src/services/watchlist/freshnessService");
+  const mondayTradingTime = new Date("2026-09-07T05:30:00Z").getTime();
+  const quotes = [mondayTradingTime - 45000]; // 45s old
+  const res = determineGlobalFreshness(quotes, mondayTradingTime);
+  assert.equal(res.state, "STALE");
+  assert.equal(res.canEvaluateConfidently, false);
+});
+

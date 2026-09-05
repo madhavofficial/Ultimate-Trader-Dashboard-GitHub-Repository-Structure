@@ -7,21 +7,22 @@ interface MockInstrument {
   token: number;
   symbol: string;
   price: number;
+  volume?: number;
   lastUpdated: number;
 }
 
 const mockInstruments = new Map<string, MockInstrument>([
-  ["INFY", { token: 1, symbol: "INFY", price: 1520, lastUpdated: Date.now() }],
-  ["RELIANCE", { token: 2, symbol: "RELIANCE", price: 2485, lastUpdated: Date.now() }],
-  ["TCS", { token: 3, symbol: "TCS", price: 3805, lastUpdated: Date.now() }],
-  ["ASIANPAINT", { token: 4, symbol: "ASIANPAINT", price: 2890, lastUpdated: Date.now() }],
-  ["INDIGO", { token: 5, symbol: "INDIGO", price: 4350, lastUpdated: Date.now() }],
-  ["HDFCBANK", { token: 6, symbol: "HDFCBANK", price: 1620, lastUpdated: Date.now() }],
-  ["TATAMOTORS", { token: 7, symbol: "TATAMOTORS", price: 980, lastUpdated: Date.now() }],
-  ["ICICIBANK", { token: 8, symbol: "ICICIBANK", price: 1210, lastUpdated: Date.now() }],
-  ["ITC", { token: 9, symbol: "ITC", price: 485, lastUpdated: Date.now() }],
-  ["SBIN", { token: 10, symbol: "SBIN", price: 815, lastUpdated: Date.now() }],
-  ["BHARTIARTL", { token: 11, symbol: "BHARTIARTL", price: 1530, lastUpdated: Date.now() }],
+  ["INFY", { token: 1, symbol: "INFY", price: 1520, volume: 820000, lastUpdated: Date.now() }],
+  ["RELIANCE", { token: 2, symbol: "RELIANCE", price: 2485, volume: 1450000, lastUpdated: Date.now() }],
+  ["TCS", { token: 3, symbol: "TCS", price: 3805, volume: 490000, lastUpdated: Date.now() }],
+  ["ASIANPAINT", { token: 4, symbol: "ASIANPAINT", price: 2890, volume: 310000, lastUpdated: Date.now() }],
+  ["INDIGO", { token: 5, symbol: "INDIGO", price: 4350, volume: 220000, lastUpdated: Date.now() }],
+  ["HDFCBANK", { token: 6, symbol: "HDFCBANK", price: 1620, volume: 1600000, lastUpdated: Date.now() }],
+  ["TATAMOTORS", { token: 7, symbol: "TATAMOTORS", price: 980, volume: 890000, lastUpdated: Date.now() }],
+  ["ICICIBANK", { token: 8, symbol: "ICICIBANK", price: 1210, volume: 780000, lastUpdated: Date.now() }],
+  ["ITC", { token: 9, symbol: "ITC", price: 485, volume: 2100000, lastUpdated: Date.now() }],
+  ["SBIN", { token: 10, symbol: "SBIN", price: 815, volume: 1300000, lastUpdated: Date.now() }],
+  ["BHARTIARTL", { token: 11, symbol: "BHARTIARTL", price: 1530, volume: 640000, lastUpdated: Date.now() }],
 ]);
 
 let nextToken = 100;
@@ -96,6 +97,7 @@ export function startMockKiteStream(io: Server) {
       const pctChange = (Math.random() - 0.495) * 0.003;
       const change = inst.price * pctChange;
       inst.price = Math.max(1, inst.price + change);
+      inst.volume = (inst.volume ?? 100000) + Math.floor(Math.random() * 500);
       inst.lastUpdated = now;
 
       return {
@@ -104,6 +106,8 @@ export function startMockKiteStream(io: Server) {
         symbol: inst.symbol,
         last_price: Number(inst.price.toFixed(2)),
         change: Number(change.toFixed(2)),
+        volume: inst.volume,
+        volume_traded: inst.volume,
         timestamp: now,
         source: "mock" as const,
       };

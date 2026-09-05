@@ -141,41 +141,28 @@ To enable reproducible end-to-end evaluation without relying on exchange operati
 ```mermaid
 flowchart TD
     subgraph Ingestion["Market Data Layer"]
-        Kite["Zerodha Kite Connect
-(Live WebSocket)"] -.->|Optional| ltpMap
-        Mock["Mock Market Stream
-(Default In-Memory Feed)"] --> ltpMap["In-Memory State: ltpMap
-(Price, Volume, Timestamp, Source)"]
+        Kite["Zerodha Kite Connect<br/>(Live WebSocket)"] -.->|Optional| ltpMap
+        Mock["Mock Market Stream<br/>(Default In-Memory Feed)"] --> ltpMap["In-Memory State: ltpMap<br/>(Price, Volume, Timestamp, Source)"]
     end
 
     subgraph Core["Watchlist Intelligence Engine"]
-        ltpMap --> CD["Change Detection Service
-(changeDetectionService.ts)"]
-        DB[(PostgreSQL
-Watchlist Checkpoints)] <--> SS["Snapshot Service
-(snapshotService.ts)"]
+        ltpMap --> CD["Change Detection Service<br/>(changeDetectionService.ts)"]
+        DB[(PostgreSQL<br/>Watchlist Checkpoints)] <--> SS["Snapshot Service<br/>(snapshotService.ts)"]
         SS --> CD
-        CD --> AS["Attention Scorer
-(4-Factor Deterministic Math)"]
-        CD --> FS["Freshness Service
-(Market Hours & Feed Latency)"]
-        AS --> Agg["Prioritized Briefing Aggregator
-(NEEDS_ATTENTION / WORTH_A_LOOK / UNCHANGED)"]
+        CD --> AS["Attention Scorer<br/>(4-Factor Deterministic Math)"]
+        CD --> FS["Freshness Service<br/>(Market Hours & Feed Latency)"]
+        AS --> Agg["Prioritized Briefing Aggregator<br/>(NEEDS_ATTENTION / WORTH_A_LOOK / UNCHANGED)"]
         FS --> Agg
     end
 
     subgraph Simulation["Evaluator Infrastructure"]
-        SC["Scenario Controller
-(scenarioController.ts)"] -->|Inject Ticks & Session Overrides| ltpMap
-        DS["Demo Scenario Service
-(demoScenarioService.ts)"] -->|Isolated In-Memory Fixtures| API
+        SC["Scenario Controller<br/>(scenarioController.ts)"] -->|Inject Ticks & Session Overrides| ltpMap
+        DS["Demo Scenario Service<br/>(demoScenarioService.ts)"] -->|Isolated In-Memory Fixtures| API
     end
 
     subgraph Interface["Presentation Layer"]
-        Agg --> API["Express API Router
-(/watchlist/*)"]
-        API --> UI["Next.js 15 UI
-(App Router: /watchlist)"]
+        Agg --> API["Express API Router<br/>(/watchlist/*)"]
+        API --> UI["Next.js 15 UI<br/>(App Router: /watchlist)"]
     end
 ```
 

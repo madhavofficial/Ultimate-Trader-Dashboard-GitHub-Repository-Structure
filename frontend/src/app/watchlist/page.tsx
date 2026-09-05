@@ -75,7 +75,7 @@ const SAMPLE_STOCKS: Record<string, SelectedStock> = {
       "TATAMOTORS gapped down sharply relative to its previous checkpoint at 11:42 AM, registering a -3.80% price drawdown under heavy volume velocity (3.1× baseline). It lagged the NIFTY Auto index by -4.20% amidst UK supply chain disclosures.",
     timeline: [
       { time: "11:42 AM", text: "Checkpoint established at ₹1,021.30 baseline." },
-      { time: "12:10 PM", text: "Heavy institutional sell block recorded (1.2M shares).", isHighlight: true },
+      { time: "12:10 PM", text: "Heavy volume selling recorded (1.2M shares).", isHighlight: true },
       { time: "12:45 PM", text: "Catalyst: Jaguar Land Rover reported temporary EU delivery bottlenecks.", isHighlight: true },
       { time: "01:15 PM", text: "-3.5% breach reached; Attention Score flagged at 81.", isHighlight: true },
     ],
@@ -101,7 +101,7 @@ const SAMPLE_STOCKS: Record<string, SelectedStock> = {
     timeline: [
       { time: "11:42 AM", text: "Checkpoint established at ₹234.30 baseline." },
       { time: "12:05 PM", text: "Buy-side accumulation sweeps resistance at ₹240.", isHighlight: true },
-      { time: "12:40 PM", text: "Institutional broker revised Dark Store target count to 1,200.", isHighlight: true },
+      { time: "12:40 PM", text: "Broker research revised Dark Store target count to 1,200.", isHighlight: true },
       { time: "01:25 PM", text: "All-time high established at ₹248.80; Attention Score 78.", isHighlight: true },
     ],
   },
@@ -319,7 +319,7 @@ export default function SmartMarketWatchPage() {
           {/* Live Market Pill with tooltip */}
           <div
             className="hidden xl:flex items-center space-x-2 bg-surface-container-lowest px-2.5 py-1 rounded-DEFAULT border border-outline-variant font-label-numeric-sm text-label-numeric-sm"
-            title="Real-time Multicast Feeds direct from NSE Colo"
+            title="Direct feed from NSE"
           >
             <span
               className={`w-2 h-2 rounded-full ${
@@ -334,14 +334,14 @@ export default function SmartMarketWatchPage() {
             <span className="text-secondary font-semibold">24,842.10 (-0.14%)</span>
           </div>
 
-          {/* Trailing Secondary Action (Demo Mode) */}
+          {/* Secondary Demo Scenario (Evaluator Test Trigger) */}
           <button
-            className="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-1 text-label-numeric-sm font-label-numeric-sm border border-outline-variant rounded-DEFAULT bg-surface-container hover:bg-surface-container-high text-on-surface-variant transition-colors duration-150 active:scale-95"
+            className="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-1 text-label-numeric-sm font-label-numeric-sm border border-outline-variant/60 rounded-DEFAULT bg-surface-container/60 hover:bg-surface-container text-outline hover:text-on-surface transition-colors duration-150 active:scale-95"
             onClick={() => setIsTimeTravelOpen(true)}
-            title="Simulate different portfolio states"
+            title="Demo Scenario for Evaluators"
           >
-            <span className="material-symbols-outlined text-[15px]">tune</span>
-            <span>Simulate</span>
+            <span className="material-symbols-outlined text-[14px]">science</span>
+            <span>Demo Scenario</span>
           </button>
 
           {/* Trailing Primary Action (Mark Checkpoint) */}
@@ -358,7 +358,7 @@ export default function SmartMarketWatchPage() {
             <button
               className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
               onClick={() => setIsTimeTravelOpen(true)}
-              title="Time History"
+              title="Scenario History"
             >
               <span className="material-symbols-outlined">history</span>
             </button>
@@ -371,7 +371,7 @@ export default function SmartMarketWatchPage() {
             </button>
             <button
               className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
-              title="Terminal Settings"
+              title="Settings"
             >
               <span className="material-symbols-outlined">tune</span>
             </button>
@@ -430,10 +430,10 @@ export default function SmartMarketWatchPage() {
             <div className="space-y-2">
               <div className="flex items-center space-x-3">
                 <span className="px-2 py-0.5 rounded-DEFAULT bg-primary/10 text-primary text-label-numeric-sm font-label-numeric-sm font-semibold border border-primary/20">
-                  Portfolio Briefing
+                  WATCHLIST BRIEFING
                 </span>
                 <span className="text-body-sm text-outline-variant font-label-numeric-sm">
-                  NSE Cash Universe · 12 Equities
+                  12 Tracked Equities
                 </span>
               </div>
               <h1 className="text-headline-xl font-headline-xl text-on-surface font-semibold tracking-tight leading-snug">
@@ -656,7 +656,7 @@ export default function SmartMarketWatchPage() {
                         <li className="flex items-start space-x-2">
                           <span className="text-secondary font-bold">•</span>
                           <span>
-                            Volume reached <strong>3.1× checkpoint velocity</strong> with heavy institutional block sales recorded.
+                            Volume reached <strong>3.1× checkpoint velocity</strong> with heavy volume selling recorded.
                           </span>
                         </li>
                         <li className="flex items-start space-x-2">
@@ -729,7 +729,7 @@ export default function SmartMarketWatchPage() {
                         <li className="flex items-start space-x-2">
                           <span className="text-primary font-bold">•</span>
                           <span className="text-on-surface-variant">
-                            Catalyst: Global institutional broker revised Dark Store target count upwards to 1,200 by FY26.
+                            Catalyst: Broker research revised Dark Store target count upwards to 1,200 by FY26.
                           </span>
                         </li>
                       </ul>
@@ -934,7 +934,7 @@ export default function SmartMarketWatchPage() {
                   02. Noise Filter
                 </span>
                 <span className="text-body-sm font-body-sm text-on-surface-variant">
-                  Standard institutional drift (±0.35%) is cleanly suppressed.
+                  Standard market noise (±0.35%) is cleanly filtered out.
                 </span>
               </div>
               <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant">
@@ -1063,11 +1063,11 @@ export default function SmartMarketWatchPage() {
             </div>
           </div>
 
-          {/* Analyst Deterministic Rationale Synthesis */}
+          {/* Summary & Deterministic Rationale */}
           <div className="bg-surface p-4 rounded-DEFAULT border border-outline-variant space-y-2">
             <div className="flex items-center space-x-1.5 text-label-numeric-sm font-label-numeric-sm text-primary">
               <span className="material-symbols-outlined text-[16px]">analytics</span>
-              <span className="font-bold uppercase tracking-wider">Analyst Synthesis</span>
+              <span className="font-bold uppercase tracking-wider">Summary &amp; Analysis</span>
             </div>
             <p className="text-body-md font-body-md text-on-surface leading-relaxed">
               &ldquo;{selectedStock.analystSynthesis}&rdquo;
@@ -1124,16 +1124,16 @@ export default function SmartMarketWatchPage() {
       </section>
 
       {/* ========================================================================= */}
-      {/* TIME-TRAVEL SIMULATION DEMO MODAL                                         */}
+      {/* DEMO SCENARIO EVALUATOR MODAL                                             */}
       {/* ========================================================================= */}
       {isTimeTravelOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-surface-container border border-outline-variant rounded-DEFAULT max-w-xl w-full p-6 space-y-5 shadow-2xl relative">
             <div className="flex items-center justify-between border-b border-outline-variant pb-3">
               <div className="flex items-center space-x-2">
-                <span className="material-symbols-outlined text-tertiary">history_toggle_off</span>
+                <span className="material-symbols-outlined text-primary">science</span>
                 <h3 className="text-headline-sm font-headline-sm text-on-surface font-bold">
-                  Interactive Time-Travel Simulation
+                  Demo Scenario (Evaluator Preview)
                 </h3>
               </div>
               <button
@@ -1144,19 +1144,19 @@ export default function SmartMarketWatchPage() {
               </button>
             </div>
             <p className="text-body-md font-body-md text-on-surface-variant">
-              See how Smart Market Watch preserves calm: You establish a checkpoint at 09:30 AM, step away for meetings, and return at 01:45 PM. Only high-signal deltas are calculated.
+              Test how Smart Market Watch preserves attention: Set a baseline checkpoint at 09:30 AM, step away, and return at 01:45 PM. Only meaningful price moves, volume anomalies, and catalysts are highlighted.
             </p>
             <div className="space-y-3 bg-surface p-4 rounded-DEFAULT border border-outline-variant">
               <div className="flex items-center justify-between text-label-numeric-sm font-label-numeric-sm">
-                <span className="text-primary font-bold">T0: Morning Checkpoint (09:30 AM)</span>
+                <span className="text-primary font-bold">Baseline Checkpoint (09:30 AM)</span>
                 <span className="text-outline">Baseline Established</span>
               </div>
               <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
                 <div className="bg-primary h-full w-full"></div>
               </div>
               <div className="flex items-center justify-between text-body-sm font-body-sm text-outline">
-                <span>+2 Hours Market Noise Filtered</span>
-                <span className="text-secondary font-semibold">Divergence Detected at T+2.3h</span>
+                <span>Normal Market Noise Filtered</span>
+                <span className="text-secondary font-semibold">Meaningful Moves Surfaced at T+2h</span>
               </div>
             </div>
             <div className="flex items-center justify-end space-x-3 pt-2">
@@ -1164,10 +1164,10 @@ export default function SmartMarketWatchPage() {
                 className="px-3 py-1.5 rounded-DEFAULT bg-surface-variant text-on-surface text-body-sm font-body-sm"
                 onClick={() => setIsTimeTravelOpen(false)}
               >
-                Close Demo
+                Close
               </button>
               <button
-                className="px-4 py-1.5 rounded-DEFAULT bg-primary-container text-on-primary-container text-body-sm font-body-sm font-semibold hover:bg-primary transition-all"
+                className="px-4 py-1.5 rounded-DEFAULT bg-primary text-on-primary text-body-sm font-body-sm font-semibold hover:bg-primary-fixed transition-all"
                 onClick={() => {
                   setIsTimeTravelOpen(false);
                   setAppState("live");
@@ -1175,7 +1175,7 @@ export default function SmartMarketWatchPage() {
                   setLastCheckedSubtext("(11:42 AM IST)");
                 }}
               >
-                Trigger Instant 2h Jump →
+                Simulate Scenario →
               </button>
             </div>
           </div>
@@ -1205,7 +1205,7 @@ export default function SmartMarketWatchPage() {
           onClick={() => setIsTimeTravelOpen(true)}
         >
           <kbd className="px-1 bg-surface-container-high text-on-surface rounded">1-5</kbd>
-          <span>Simulate States</span>
+          <span>Demo States</span>
         </span>
       </div>
     </div>

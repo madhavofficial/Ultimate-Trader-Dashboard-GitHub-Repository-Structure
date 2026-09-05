@@ -17,6 +17,7 @@ import riskRoutes from "./routes/risk";
 import signalsRoutes from "./routes/signals";
 import analyticsRoutes from "./routes/analytics";
 import notificationsRoutes from "./routes/notifications";
+import watchlistChangesRoutes from "./routes/watchlistChanges";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
 import { prisma } from "./db/client";
@@ -66,6 +67,7 @@ app.use("/trades", tradeRoutes);
 app.use("/alerts", alertRoutes);
 app.use("/broker/kite", kiteRoutes);
 app.use("/market", marketRoutes);
+app.use("/watchlist", watchlistChangesRoutes);
 app.use("/intelligence", intelligenceRoutes);
 app.use("/risk", riskRoutes);
 app.use("/signals", signalsRoutes);

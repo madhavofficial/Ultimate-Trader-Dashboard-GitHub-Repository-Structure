@@ -46,6 +46,41 @@ integrationTest("core HTTP lifecycle", async () => {
     assert.equal(refresh.status, 200);
     const refreshBody = await refresh.json() as { accessToken: string };
     assert.ok(refreshBody.accessToken);
+
+    // Smart Market Watchlist API End-to-End lifecycle
+    const authHeaders = { authorization: `Bearer ${loginBody.accessToken}` };
+
+    const addWatchlist = await request("/market/watchlist", {
+      method: "POST",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ symbol: "INFY" }),
+    });
+    assert.equal(addWatchlist.status, 201);
+
+    const summaryRes = await request("/watchlist/summary", { headers: authHeaders });
+    assert.equal(summaryRes.status, 200);
+    const summary = await summaryRes.json() as any;
+    assert.equal(summary.ok, true);
+    assert.equal(summary.counts.total, 1);
+
+    const checkpointRes = await request("/watchlist/checkpoint", {
+      method: "POST",
+      headers: authHeaders,
+    });
+    assert.equal(checkpointRes.status, 200);
+    const checkpointData = await checkpointRes.json() as any;
+    assert.equal(checkpointData.ok, true);
+    assert.equal(checkpointData.itemCount, 1);
+
+    const demoRes = await request("/watchlist/demo-scenario", {
+      method: "POST",
+      headers: authHeaders,
+    });
+    assert.equal(demoRes.status, 200);
+    const demoData = await demoRes.json() as any;
+    assert.equal(demoData.ok, true);
+    assert.equal(demoData.demoActive, true);
+    assert.equal(demoData.counts.total, 4);
   } finally {
     if (databaseReady) {
       const user = await prisma.user.findUnique({ where: { email } });

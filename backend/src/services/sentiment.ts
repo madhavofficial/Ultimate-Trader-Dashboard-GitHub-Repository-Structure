@@ -29,6 +29,7 @@ export interface EnrichedEvent {
     rationale: string;
   }>;
   reasoning: string;
+  priceImpactExplanation: string;
 }
 
 // Pre-configured transmission knowledge graph for Indian market equities
@@ -105,22 +106,29 @@ export const SECTOR_KNOWLEDGE_GRAPH: Record<string, {
 
 const SYMBOL_KEYWORDS: Record<string, string[]> = {
   INFY: ["infosys", "infy", "salil parekh"],
-  RELIANCE: ["reliance", "ril", "mukesh ambani", "jio", "reliance retail"],
-  TCS: ["tcs", "tata consultancy", "k krithivasan"],
+  RELIANCE: ["reliance", "ril", "mukesh ambani", "jio", "reliance retail", "reliance industries"],
+  TCS: ["tcs", "tata consultancy", "k krithivasan", "tata sons"],
   TATAMOTORS: ["tata motors", "jlr", "jaguar land rover", "tamo"],
-  HDFCBANK: ["hdfc bank", "hdfc"],
+  HDFCBANK: ["hdfc bank", "hdfc", "housing development finance"],
   ICICIBANK: ["icici bank", "icici"],
-  SBIN: ["state bank of india", "sbi", "sbin"],
+  SBIN: ["state bank of india", "sbi", "sbin", "state bank"],
   TATASTEEL: ["tata steel"],
   ASIANPAINT: ["asian paints", "asian paint"],
   INDIGO: ["indigo", "interglobe aviation"],
+  BHARTIARTL: ["bharti airtel", "airtel"],
+  KOTAKBANK: ["kotak mahindra", "kotak bank", "kotak"],
+  AXISBANK: ["axis bank", "axis"],
+  JSWSTEEL: ["jsw steel", "jsw"],
+  MARUTI: ["maruti suzuki", "maruti"],
+  ITC: ["itc", "itc limited"],
+  LT: ["larsen & toubro", "l&t", "larsen"],
 };
 
 const POSITIVE_TRIGGERS = [
   "profit surges", "profit jumps", "revenue up", "beats estimates", "strong results",
   "upgrade", "target raised", "wins contract", "deal signed", "dividend declared",
   "rbi rate cut", "stimulus", "duty cut", "tax relief", "approval granted",
-  "order book expands", "all-time high", "record sales", "expansion plan",
+  "order book expands", "all-time high", "record sales", "expansion plan", "credit growth",
 ];
 
 const NEGATIVE_TRIGGERS = [
@@ -129,6 +137,28 @@ const NEGATIVE_TRIGGERS = [
   "duty hike", "tax increase", "fraud", "auditor resigns", "default",
   "cyber attack", "us recession", "sanctions", "strike", "layoffs",
 ];
+
+export function generatePriceImpactExplanation(
+  title: string,
+  summary: string,
+  symbols: string[],
+  eventType: EventType,
+  sentimentScore: number
+): string {
+  const primarySymbol = symbols[0] || "the underlying equities";
+
+  if (sentimentScore > 0.3) {
+    return `Bullish ${eventType.toLowerCase()} catalyst indicates favorable operating momentum and margin resilience for ${primarySymbol}, which is expected to support near-term earnings growth and positive share price re-rating.`;
+  } else if (sentimentScore < -0.3) {
+    return `Bearish ${eventType.toLowerCase()} development presents operational or cost headwinds for ${primarySymbol}, creating margin pressure and triggering near-term downside risk on the stock price.`;
+  } else if (sentimentScore > 0) {
+    return `Mildly positive development supports steady operational continuity for ${primarySymbol}, offering modest valuation support.`;
+  } else if (sentimentScore < 0) {
+    return `Slight negative friction could introduce temporary caution in ${primarySymbol} trading until subsequent operational data confirms impact.`;
+  }
+
+  return `Neutral development providing operational updates without materially changing the near-term cash flow trajectory or consensus valuation multiples for ${primarySymbol}.`;
+}
 
 export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
   const text = `${title} ${summary}`.toLowerCase();
@@ -244,6 +274,34 @@ export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
     });
   }
 
+  // Banking, RBI & Credit transmission
+  if (text.includes("rbi") || text.includes("bank") || text.includes("banking") || text.includes("credit") || text.includes("npa") || text.includes("lending") || text.includes("interest rate")) {
+    const isRateCut = text.includes("rate cut") || text.includes("liquidity surplus") || text.includes("growth") || text.includes("expansion") || sentimentScore > 0;
+    const dir = isRateCut ? "POSITIVE" : "NEGATIVE";
+    transmissionPath = "DIRECT";
+    rippleImpacts.push({
+      symbol: "HDFCBANK",
+      sector: "Banking & Financial Services",
+      impactDirection: dir,
+      strength: 0.8,
+      rationale: isRateCut ? "Expanding retail & commercial credit demand with stable cost of funds" : "Tighter liquidity or regulatory oversight on margin yield",
+    });
+    rippleImpacts.push({
+      symbol: "ICICIBANK",
+      sector: "Banking & Financial Services",
+      impactDirection: dir,
+      strength: 0.75,
+      rationale: isRateCut ? "Accelerated SME loan pickup and industry-leading return on assets" : "Pressure on floating rate portfolio spreads",
+    });
+    rippleImpacts.push({
+      symbol: "SBIN",
+      sector: "Banking & Financial Services",
+      impactDirection: dir,
+      strength: 0.7,
+      rationale: isRateCut ? "Sovereign/PSU corporate capex disbursement and bond portfolio gains" : "Higher deposit provisioning requirements",
+    });
+  }
+
   // 5. Impact Horizon
   let impactHorizon: ImpactHorizon = "SHORT_TERM";
   if (eventType === "EARNINGS" || eventType === "REGULATORY") {
@@ -253,6 +311,13 @@ export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
   }
 
   const confidence = Number(Math.min(0.95, Math.max(0.6, 0.65 + (posCount + negCount) * 0.08 + (detectedSymbols.length > 0 ? 0.15 : 0))).toFixed(2));
+  const priceImpactExplanation = generatePriceImpactExplanation(
+    title,
+    summary,
+    detectedSymbols.length > 0 ? detectedSymbols : ["NIFTY"],
+    eventType,
+    sentimentScore
+  );
 
   return {
     title,
@@ -266,6 +331,7 @@ export function analyzeNewsText(title: string, summary: string): EnrichedEvent {
     transmissionPath,
     rippleImpacts,
     reasoning: `Extracted ${detectedSymbols.length} ticker(s) with ${eventType} event category. Sentiment scored at ${sentimentScore > 0 ? '+' : ''}${sentimentScore} (confidence: ${Math.round(confidence * 100)}%). ${rippleImpacts.length > 0 ? `Identified ${rippleImpacts.length} second-order market transmission ripple(s).` : 'Direct corporate price action transmission.'}`,
+    priceImpactExplanation,
   };
 }
 
@@ -288,6 +354,7 @@ const llmOutputSchema = z.object({
     })
   ).default([]),
   reasoning: z.string().default("Structured LLM analysis"),
+  priceImpactExplanation: z.string().default(""),
 });
 
 export async function analyzeNewsAsync(title: string, summary: string): Promise<EnrichedEvent> {
@@ -312,56 +379,60 @@ Return ONLY valid JSON matching this schema:
       "rationale": "Crude oil derivative input cost pressure"
     }
   ],
-  "reasoning": "Reasoning summary."
+  "reasoning": "Reasoning summary.",
+  "priceImpactExplanation": "A concise 1-2 sentence financial explanation detailing specifically how this event impacts the company valuation, margins, cash flow, or supply/demand dynamics to affect its share price."
 }`;
 
-  // 1. Try Open Source LLM / Groq (openai-oss-120b)
+  // 1. Try Open Source LLM / Groq (openai/gpt-oss-120b or qwen/qwen3.8-27b)
   if (process.env.GROQ_API_KEY) {
-    try {
-      const model = process.env.GROQ_MODEL || "openai-oss-120b";
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        signal: controller.signal,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: "You are an expert Indian stock market quantitative analyst. Respond with pure JSON." },
-            { role: "user", content: prompt },
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.1,
-        }),
-      });
-      clearTimeout(timeout);
+    const groqModels = [process.env.GROQ_MODEL, "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"].filter(Boolean) as string[];
+    for (const model of groqModels) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 7000);
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          signal: controller.signal,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: "You are an expert Indian stock market quantitative analyst. Respond with pure JSON only." },
+              { role: "user", content: prompt },
+            ],
+            response_format: { type: "json_object" },
+            temperature: 0.1,
+          }),
+        });
+        clearTimeout(timeout);
 
-      if (res.ok) {
-        const data = await res.json();
-        const content = data?.choices?.[0]?.message?.content;
-        if (content) {
-          const parsed = llmOutputSchema.parse(JSON.parse(content));
-          return {
-            title,
-            source: `LLM_${model.toUpperCase().replace(/[-/.]/g, "_")}`,
-            summary: summary.slice(0, 300),
-            eventType: parsed.eventType,
-            primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
-            sentimentScore: parsed.sentimentScore,
-            confidence: parsed.confidence,
-            impactHorizon: parsed.impactHorizon,
-            transmissionPath: parsed.transmissionPath,
-            rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
-            reasoning: parsed.reasoning,
-          };
+        if (res.ok) {
+          const data = await res.json();
+          const content = data?.choices?.[0]?.message?.content;
+          if (content) {
+            const parsed = llmOutputSchema.parse(JSON.parse(content));
+            return {
+              title,
+              source: `LLM_${model.toUpperCase().replace(/[-/.]/g, "_")}`,
+              summary: summary.slice(0, 300),
+              eventType: parsed.eventType,
+              primarySymbols: parsed.primarySymbols.length > 0 ? parsed.primarySymbols : ["NIFTY"],
+              sentimentScore: parsed.sentimentScore,
+              confidence: parsed.confidence,
+              impactHorizon: parsed.impactHorizon,
+              transmissionPath: parsed.transmissionPath,
+              rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
+              reasoning: parsed.reasoning,
+              priceImpactExplanation: parsed.priceImpactExplanation?.trim() || generatePriceImpactExplanation(title, summary, parsed.primarySymbols, parsed.eventType, parsed.sentimentScore),
+            };
+          }
         }
+      } catch (err) {
+        console.warn(`Groq model ${model} failed, trying next:`, err);
       }
-    } catch (err) {
-      console.warn("Groq/OSS sentiment extraction failed:", err);
     }
   }
 
@@ -399,6 +470,7 @@ Return ONLY valid JSON matching this schema:
             transmissionPath: parsed.transmissionPath,
             rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
             reasoning: parsed.reasoning,
+            priceImpactExplanation: parsed.priceImpactExplanation?.trim() || generatePriceImpactExplanation(title, summary, parsed.primarySymbols, parsed.eventType, parsed.sentimentScore),
           };
         }
       }
@@ -449,6 +521,7 @@ Return ONLY valid JSON matching this schema:
             transmissionPath: parsed.transmissionPath,
             rippleImpacts: parsed.rippleImpacts as EnrichedEvent["rippleImpacts"],
             reasoning: parsed.reasoning,
+            priceImpactExplanation: parsed.priceImpactExplanation?.trim() || generatePriceImpactExplanation(title, summary, parsed.primarySymbols, parsed.eventType, parsed.sentimentScore),
           };
         }
       }

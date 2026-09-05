@@ -2,25 +2,33 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   WatchlistSummaryResponse,
   WatchlistChangeItem,
   MarketFreshnessState,
 } from "../../types/watchlistContract";
+import InteractivePriceChart from "../../components/InteractivePriceChart";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type AppMode = "REAL" | "DEMO";
-
 export default function SmartMarketWatchPage() {
-  const [mode, setMode] = useState<AppMode>("REAL");
+  const router = useRouter();
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [data, setData] = useState<WatchlistSummaryResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedStockSymbol, setSelectedStockSymbol] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const [actionPending, setActionPending] = useState(false);
+  const [events, setEvents] = useState<any[]>([]);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "CATEGORY_A" | "CATEGORY_B" | "CATEGORY_C">("ALL");
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Helper to fetch authorization header if user is logged in
   const getAuthHeaders = (): HeadersInit => {
@@ -29,41 +37,29 @@ export default function SmartMarketWatchPage() {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  // 1. DEMO MODE: Load deterministic evaluator scenario from backend (unauthenticated endpoint)
-  const fetchDemoScenario = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_URL}/watchlist/demo-scenario`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to load demo scenario (${res.status})`);
-      }
-      const json: WatchlistSummaryResponse = await res.json();
-      setData(json);
-      setMode("DEMO");
-      setIsDemoModalOpen(false);
-    } catch (err: any) {
-      setError(err.message || "Failed to trigger evaluator demo scenario");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // 2. REAL MODE: Load live watchlist summary from backend (requires authenticated user)
+  // Load live watchlist summary from backend (requires authenticated user)
   const fetchRealSummary = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const headers = getAuthHeaders();
-      const res = await fetch(`${API_URL}/watchlist/summary`, {
-        headers,
-      });
+      const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+      if (!token) {
+        setIsAuthenticated(false);
+        router.replace("/dashboard");
+        return;
+      }
+      const [res, intelRes] = await Promise.all([
+        fetch(`${API_URL}/watchlist/summary`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_URL}/intelligence/events`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => null),
+      ]);
       if (res.status === 401) {
-        // Not authenticated: notify and switch to Demo Mode
-        setError("Unauthenticated: Please log in to view personal watchlists. Switched to Evaluator Demo Mode.");
-        await fetchDemoScenario();
+        localStorage.removeItem("accessToken");
+        setIsAuthenticated(false);
+        router.replace("/dashboard");
         return;
       }
       if (!res.ok) {
@@ -71,53 +67,26 @@ export default function SmartMarketWatchPage() {
       }
       const json: WatchlistSummaryResponse = await res.json();
       setData(json);
-      setMode("REAL");
+      if (intelRes && intelRes.ok) {
+        try {
+          const intelJson = await intelRes.json();
+          if (Array.isArray(intelJson.events)) {
+            setEvents(intelJson.events);
+          }
+        } catch {
+          // ignore parsing error
+        }
+      }
+      setIsAuthenticated(true);
     } catch (err: any) {
       setError(err.message || "Failed to connect to backend market service");
     } finally {
       setLoading(false);
     }
-  }, [fetchDemoScenario]);
+  }, [router]);
 
-  // 3. CHECKPOINT: Acknowledge current spot prices and reset baseline
+  // CHECKPOINT: Acknowledge current spot prices and reset baseline
   const handleMarkAllAsChecked = useCallback(async () => {
-    if (mode === "DEMO") {
-      // In DEMO mode, simulate in-memory caught up state without touching production DB
-      if (!data) return;
-      const all = [
-        ...data.groups.needsAttention,
-        ...data.groups.worthALook,
-        ...data.groups.unchanged,
-      ].map((s) => ({
-        ...s,
-        priceChangePct: 0,
-        attentionScore: 0,
-        significance: "UNCHANGED" as const,
-        reasons: [],
-        summaryExplanation: "Baseline checkpoint established.",
-      }));
-
-      setData({
-        ...data,
-        lastCheckedAt: new Date().toISOString(),
-        timeAwayHuman: "Just now",
-        counts: {
-          total: all.length,
-          needsAttention: 0,
-          worthALook: 0,
-          unchanged: all.length,
-        },
-        groups: {
-          needsAttention: [],
-          worthALook: [],
-          unchanged: all,
-        },
-      });
-      setIsDrawerOpen(false);
-      return;
-    }
-
-    // In REAL mode, call authenticated POST /watchlist/checkpoint
     setActionPending(true);
     try {
       const res = await fetch(`${API_URL}/watchlist/checkpoint`, {
@@ -129,7 +98,10 @@ export default function SmartMarketWatchPage() {
       });
       if (!res.ok) {
         if (res.status === 401) {
-          throw new Error("Please log in to save a personal baseline checkpoint.");
+          localStorage.removeItem("accessToken");
+          setIsAuthenticated(false);
+          router.replace("/dashboard");
+          return;
         }
         throw new Error(`Failed to record checkpoint (${res.status})`);
       }
@@ -141,17 +113,57 @@ export default function SmartMarketWatchPage() {
     } finally {
       setActionPending(false);
     }
-  }, [mode, data, fetchRealSummary]);
+  }, [router, fetchRealSummary]);
 
-  // Initial mount: load real summary if token present, otherwise default to demo mode
+  // SINGLE STOCK CHECKPOINT: Acknowledge current spot price and zero out deltas for a single symbol
+  const handleMarkSingleStockChecked = useCallback(async (symbol: string) => {
+    setActionPending(true);
+    try {
+      const res = await fetch(`${API_URL}/watchlist/checkpoint/${encodeURIComponent(symbol)}`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          localStorage.removeItem("accessToken");
+          setIsAuthenticated(false);
+          router.replace("/dashboard");
+          return;
+        }
+        throw new Error(`Failed to record checkpoint for ${symbol} (${res.status})`);
+      }
+      // Immediately refresh the real summary to observe that this stock moved to Unchanged
+      await fetchRealSummary();
+    } catch (err: any) {
+      alert(`Error setting checkpoint for ${symbol}: ${err.message}`);
+    } finally {
+      setActionPending(false);
+    }
+  }, [router, fetchRealSummary]);
+
+  // Initial mount: verify auth token; if missing, immediately redirect to login page
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
-    if (token) {
-      fetchRealSummary();
-    } else {
-      fetchDemoScenario();
+    if (!token) {
+      setIsAuthenticated(false);
+      router.replace("/dashboard");
+      return;
     }
-  }, [fetchRealSummary, fetchDemoScenario]);
+    setIsAuthenticated(true);
+    fetchRealSummary();
+  }, [router, fetchRealSummary]);
+
+  // Periodic 60-second polling for live watchlist checkpoint deltas & news catalysts
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const pollTimer = setInterval(() => {
+      void fetchRealSummary();
+    }, 60000);
+    return () => clearInterval(pollTimer);
+  }, [isAuthenticated, fetchRealSummary]);
 
   // Flatten all items across groups for quick lookup in detail drawer
   const allStocks = useMemo(() => {
@@ -167,6 +179,53 @@ export default function SmartMarketWatchPage() {
     if (!selectedStockSymbol || !allStocks.length) return null;
     return allStocks.find((s) => s.symbol === selectedStockSymbol) || null;
   }, [selectedStockSymbol, allStocks]);
+
+  const matchedNews = useMemo(() => {
+    if (!selectedStockSymbol || !events.length) return [];
+    const upper = selectedStockSymbol.toUpperCase();
+
+    // Dynamically derive natural search terms from the ticker without hardcoding
+    const searchTerms = [upper];
+    for (const suffix of ["BANK", "MOTORS", "STEEL", "POWER", "FINANCE", "PAINTS", "TECH", "PHARMA"]) {
+      if (upper.endsWith(suffix) && upper.length > suffix.length) {
+        const base = upper.slice(0, -suffix.length);
+        searchTerms.push(`${base} ${suffix}`);
+        if (base.length >= 4) searchTerms.push(base);
+      }
+    }
+
+    // Priority 1: Direct primary symbol match (AI-extracted NSE ticker)
+    const directMatches = events.filter((e: any) =>
+      Array.isArray(e.primarySymbols) && e.primarySymbols.includes(upper)
+    );
+
+    // Priority 2: Ripple impact match (cross-market second-order transmission)
+    const rippleMatches = events.filter(
+      (e: any) =>
+        !directMatches.includes(e) &&
+        Array.isArray(e.rippleImpacts) &&
+        e.rippleImpacts.some((r: any) => r.symbol === upper)
+    );
+
+    // Priority 3: Dynamic ticker & company name match with exact word boundaries
+    const textMatches = events.filter((e: any) => {
+      if (directMatches.includes(e) || rippleMatches.includes(e)) return false;
+      const textToSearch = `${e.title || ""} ${e.summary || ""}`;
+      return searchTerms.some((term) => {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`\\b${escaped}\\b`, "i").test(textToSearch);
+      });
+    });
+
+    const combined = [...directMatches, ...rippleMatches, ...textMatches];
+    if (combined.length > 0) return combined;
+
+    // Macro fallback: Only return broad economy-wide macroeconomic events (e.g. GDP, Rates)
+    const macroEvents = events.filter(
+      (e: any) => e.eventType === "MACRO" || (Array.isArray(e.primarySymbols) && e.primarySymbols.includes("NIFTY") && e.transmissionPath === "MACRO_FX")
+    );
+    return macroEvents.slice(0, 2).map((ev: any) => ({ ...ev, isFallback: true }));
+  }, [selectedStockSymbol, events]);
 
   const openDrawer = (symbol: string) => {
     setSelectedStockSymbol(symbol);
@@ -185,7 +244,6 @@ export default function SmartMarketWatchPage() {
 
       if (e.key === "Escape") {
         setIsDrawerOpen(false);
-        setIsDemoModalOpen(false);
       } else if (e.key === "c" || e.key === "C") {
         handleMarkAllAsChecked();
       }
@@ -229,51 +287,18 @@ export default function SmartMarketWatchPage() {
 
   const freshnessInfo = renderFreshnessBadge(data?.marketFreshness.state || "LIVE");
 
-  return (
-    <div className="bg-background text-on-surface antialiased min-h-screen selection:bg-primary-container selection:text-on-primary-container">
-      {/* ========================================================================= */}
-      {/* MODE INDICATOR / OPERATIONAL CONTROL BAR                                   */}
-      {/* ========================================================================= */}
-      <div className="w-full bg-surface-container-lowest border-b border-outline-variant px-gutter-desktop py-1.5 flex items-center justify-between text-caption-caps font-caption-caps text-outline">
-        <div className="flex items-center space-x-2">
-          <span className="font-bold text-on-surface">OPERATIONAL MODE:</span>
-          <button
-            onClick={fetchRealSummary}
-            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              mode === "REAL"
-                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            ● Real Mode (Live Backend)
-          </button>
-          <button
-            onClick={fetchDemoScenario}
-            className={`px-2.5 py-1 rounded-DEFAULT font-label-numeric-sm text-label-numeric-sm transition-all ${
-              mode === "DEMO"
-                ? "bg-surface-variant text-primary border border-outline-variant font-bold"
-                : "bg-surface-container hover:bg-surface-variant text-on-surface-variant border border-transparent hover:border-outline-variant"
-            }`}
-          >
-            ⚡ Demo Mode (Evaluator Scenario)
-          </button>
-        </div>
-        <div className="hidden md:flex items-center space-x-3 text-label-numeric-sm">
-          {mode === "DEMO" && (
-            <span className="text-tertiary font-bold">
-              [EVALUATOR SCENARIO ACTIVE — DETERMINISTIC T0 → T1 DELTAS]
-            </span>
-          )}
-          <span>
-            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">C</kbd> to checkpoint
-          </span>
-          <span>•</span>
-          <span>
-            Press <kbd className="px-1 bg-surface-container-high text-on-surface rounded">ESC</kbd> to close drawer
-          </span>
+  if (isAuthenticated === null || !isAuthenticated) {
+    return (
+      <div className="bg-background text-on-surface antialiased min-h-screen flex items-center justify-center">
+        <div className="p-8 text-center text-outline font-label-numeric-md">
+          Verifying session authentication...
         </div>
       </div>
+    );
+  }
 
+  return (
+    <div className="bg-background text-on-surface antialiased min-h-screen selection:bg-primary-container selection:text-on-primary-container">
       {/* ========================================================================= */}
       {/* SHARED HEADER                                                             */}
       {/* ========================================================================= */}
@@ -317,37 +342,25 @@ export default function SmartMarketWatchPage() {
           >
             What Changed
           </a>
-          <button
-            className="text-on-surface-variant hover:text-on-surface font-medium pb-3 transition-colors duration-150 text-body-md font-body-md"
-            onClick={() => alert(`Status Note: ${data?.marketFreshness.note || "All systems nominal."}`)}
-          >
-            Feed Status
-          </button>
         </nav>
 
-        {/* Right Cluster: Live Feed Pill + Actions */}
+        {/* Right Cluster: Live Feed Status + Actions */}
         <div className="flex items-center space-x-3">
-          {/* Live Market Pill */}
+          {/* Live Market & Feed Status Pill (Side Updating) */}
           <div
-            className="hidden xl:flex items-center space-x-2 bg-surface-container-lowest px-2.5 py-1 rounded-DEFAULT border border-outline-variant font-label-numeric-sm text-label-numeric-sm"
-            title={data?.marketFreshness.note || "Direct market stream"}
+            className="hidden sm:flex items-center space-x-2 bg-surface-container-lowest px-2.5 py-1 rounded-DEFAULT border border-outline-variant font-label-numeric-sm text-label-numeric-sm"
+            title={`NSE Market Feed: ${data?.marketFreshness.state || "LIVE"} · ${data?.marketFreshness.note || "Direct stream nominal"}`}
           >
             <span className={`w-2 h-2 rounded-full ${freshnessInfo.dotClass}`}></span>
-            <span className="text-on-surface-variant">{freshnessInfo.text}</span>
+            <span className="text-on-surface font-medium">{freshnessInfo.text}</span>
+            <span className="text-outline">|</span>
+            <span className="text-on-surface-variant font-mono text-[11px]">
+              {currentTime ? new Date(currentTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Active"}
+            </span>
             <span className="text-outline">|</span>
             <span className="text-on-surface font-semibold">NIFTY 50:</span>
-            <span className="text-primary font-semibold">Benchmark Tracked</span>
+            <span className="text-primary font-semibold">Tracked</span>
           </div>
-
-          {/* Secondary Action: Demo Scenario Trigger */}
-          <button
-            className="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-1 text-label-numeric-sm font-label-numeric-sm border border-outline-variant/60 rounded-DEFAULT bg-surface-container/60 hover:bg-surface-container text-outline hover:text-on-surface transition-colors duration-150 active:scale-95"
-            onClick={() => setIsDemoModalOpen(true)}
-            title="Evaluator demo scenario preview"
-          >
-            <span className="material-symbols-outlined text-[14px]">science</span>
-            <span>Demo Scenario</span>
-          </button>
 
           {/* Primary Action: Mark Checkpoint */}
           <button
@@ -363,12 +376,24 @@ export default function SmartMarketWatchPage() {
           {/* Quick Refresh */}
           <button
             className="w-8 h-8 rounded-DEFAULT flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors duration-150"
-            onClick={mode === "REAL" ? fetchRealSummary : fetchDemoScenario}
+            onClick={fetchRealSummary}
             title="Refresh Data"
           >
             <span className={`material-symbols-outlined ${loading ? "animate-spin" : ""}`}>
               refresh
             </span>
+          </button>
+
+          {/* Log out Action */}
+          <button
+            className="hidden sm:inline-flex items-center space-x-1 px-2.5 py-1 text-label-numeric-sm font-label-numeric-sm border border-outline-variant/60 rounded-DEFAULT bg-surface-container/60 hover:bg-surface-container text-outline hover:text-on-surface transition-colors duration-150 active:scale-95"
+            onClick={() => {
+              localStorage.removeItem("accessToken");
+              router.replace("/dashboard");
+            }}
+            title="Log out"
+          >
+            <span>Log out</span>
           </button>
 
           {/* User Profile */}
@@ -445,6 +470,11 @@ export default function SmartMarketWatchPage() {
                     <span className="text-body-sm text-outline-variant font-label-numeric-sm">
                       {data.counts.total} Tracked Equities
                     </span>
+                    <span className="text-outline-variant">•</span>
+                    <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-DEFAULT bg-surface-container-high border border-outline-variant text-[11px] font-label-numeric-sm text-on-surface">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                      <span>AI Engine: Active ({events.length} News Catalysts)</span>
+                    </span>
                   </div>
                   <h1 className="text-headline-xl font-headline-xl text-on-surface font-semibold tracking-tight leading-snug">
                     What meaningfully changed while you were away?
@@ -489,27 +519,69 @@ export default function SmartMarketWatchPage() {
               {/* Triage Summary Badges */}
               <div className="mt-5 pt-4 border-t border-outline-variant flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-secondary-container/40">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory("ALL")}
+                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-DEFAULT border transition-all text-label-numeric-sm font-semibold cursor-pointer ${
+                      selectedCategory === "ALL"
+                        ? "bg-primary text-background border-primary shadow-sm"
+                        : "bg-surface-container text-on-surface-variant hover:text-on-surface border-outline-variant hover:border-outline"
+                    }`}
+                    title="Show all categories"
+                  >
+                    <span>All ({data.counts.total})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(selectedCategory === "CATEGORY_A" ? "ALL" : "CATEGORY_A")}
+                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-DEFAULT border transition-all cursor-pointer ${
+                      selectedCategory === "CATEGORY_A"
+                        ? "bg-secondary-container/30 text-secondary border-secondary shadow-md ring-1 ring-secondary"
+                        : "bg-surface-container text-secondary border-secondary-container/40 hover:border-secondary/70 hover:bg-surface-container-high"
+                    }`}
+                    title="Filter to Category A: Needs Attention"
+                  >
                     <span className="w-2 h-2 rounded-full bg-secondary"></span>
-                    <span className="font-label-numeric-md text-label-numeric-md text-secondary font-bold">
+                    <span className="font-label-numeric-md text-label-numeric-md font-bold">
                       {data.counts.needsAttention} NEEDS ATTENTION
                     </span>
-                    <span className="text-outline text-label-numeric-sm">(Score &gt; 60 or |Δ| &ge; 2.5%)</span>
-                  </div>
-                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-tertiary-container/40">
+                    <span className="text-outline text-label-numeric-sm hidden sm:inline">(Score &gt; 60 or |Δ| &ge; 2.5%)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(selectedCategory === "CATEGORY_B" ? "ALL" : "CATEGORY_B")}
+                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-DEFAULT border transition-all cursor-pointer ${
+                      selectedCategory === "CATEGORY_B"
+                        ? "bg-tertiary-container/30 text-tertiary border-tertiary shadow-md ring-1 ring-tertiary"
+                        : "bg-surface-container text-tertiary border-tertiary-container/40 hover:border-tertiary/70 hover:bg-surface-container-high"
+                    }`}
+                    title="Filter to Category B: Worth A Look"
+                  >
                     <span className="w-2 h-2 rounded-full bg-tertiary"></span>
-                    <span className="font-label-numeric-md text-label-numeric-md text-tertiary font-bold">
+                    <span className="font-label-numeric-md text-label-numeric-md font-bold">
                       {data.counts.worthALook} WORTH A LOOK
                     </span>
-                    <span className="text-outline text-label-numeric-sm">(Score 30–59 or |Δ| &ge; 1.0%)</span>
-                  </div>
-                  <div className="flex items-center space-x-2 bg-surface-container px-3 py-1.5 rounded-DEFAULT border border-outline-variant">
+                    <span className="text-outline text-label-numeric-sm hidden sm:inline">(Score 30–59 or |Δ| &ge; 1.0%)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(selectedCategory === "CATEGORY_C" ? "ALL" : "CATEGORY_C")}
+                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-DEFAULT border transition-all cursor-pointer ${
+                      selectedCategory === "CATEGORY_C"
+                        ? "bg-surface-container-high text-on-surface border-outline shadow-md ring-1 ring-outline"
+                        : "bg-surface-container text-on-surface-variant border-outline-variant hover:border-outline hover:bg-surface-container-high"
+                    }`}
+                    title="Filter to Category C: Unchanged & Noise Filtered"
+                  >
                     <span className="w-2 h-2 rounded-full bg-outline"></span>
-                    <span className="font-label-numeric-md text-label-numeric-md text-on-surface-variant font-medium">
-                      {data.counts.unchanged} UNCHANGED / NO MOVE
+                    <span className="font-label-numeric-md text-label-numeric-md font-medium">
+                      {data.counts.unchanged} UNCHANGED
                     </span>
-                    <span className="text-outline text-label-numeric-sm">(Filtered noise &lt; ±1.0%)</span>
-                  </div>
+                    <span className="text-outline text-label-numeric-sm hidden sm:inline">(Noise &lt; ±1.0%)</span>
+                  </button>
                 </div>
 
                 {/* Guiding Principles */}
@@ -597,22 +669,68 @@ export default function SmartMarketWatchPage() {
                     </p>
                   </div>
                   <div className="pt-2 flex items-center justify-center space-x-3">
-                    <button
+                    <Link
+                      href="/dashboard"
                       className="px-4 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-label-numeric-sm font-label-numeric-sm"
-                      onClick={fetchDemoScenario}
                     >
-                      Run Evaluator Demo Scenario →
-                    </button>
+                      Open Terminal Dashboard →
+                    </Link>
                   </div>
                 </div>
               )}
 
             {/* ACTIVE RANKED FEED (When deltas exist) */}
             {!data.isFirstVisit &&
-              (data.counts.needsAttention > 0 || data.counts.worthALook > 0) && (
+              (data.counts.needsAttention > 0 || data.counts.worthALook > 0 || data.counts.unchanged > 0) && (
                 <div className="space-y-8">
+                  {/* Category Filter Notice Bar when filtering */}
+                  {selectedCategory !== "ALL" && (
+                    <div className="flex items-center justify-between p-3 rounded-DEFAULT bg-surface-container border border-outline-variant text-body-sm shadow-sm">
+                      <div className="flex items-center space-x-2">
+                        <span className="material-symbols-outlined text-primary text-[18px]">filter_list</span>
+                        <span>
+                          Filtered view: <strong className="text-on-surface font-semibold">
+                            {selectedCategory === "CATEGORY_A"
+                              ? `Category A: Needs Attention (${data.groups.needsAttention.length} equities)`
+                              : selectedCategory === "CATEGORY_B"
+                              ? `Category B: Worth A Look (${data.groups.worthALook.length} equities)`
+                              : `Category C: Unchanged & Noise Filtered (${data.groups.unchanged.length} equities)`}
+                          </strong>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategory("ALL")}
+                        className="text-primary hover:underline font-medium text-label-numeric-sm flex items-center space-x-1"
+                      >
+                        <span>Show All Categories</span>
+                        <span>✕</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Empty state if selected category has 0 items */}
+                  {selectedCategory === "CATEGORY_A" && data.groups.needsAttention.length === 0 && (
+                    <div className="p-8 text-center bg-surface-container border border-outline-variant rounded-DEFAULT space-y-2">
+                      <p className="text-body-md text-on-surface font-semibold">No equities currently in Category A: Needs Attention</p>
+                      <button onClick={() => setSelectedCategory("ALL")} className="text-primary text-body-sm hover:underline">Show All Categories →</button>
+                    </div>
+                  )}
+                  {selectedCategory === "CATEGORY_B" && data.groups.worthALook.length === 0 && (
+                    <div className="p-8 text-center bg-surface-container border border-outline-variant rounded-DEFAULT space-y-2">
+                      <p className="text-body-md text-on-surface font-semibold">No equities currently in Category B: Worth A Look</p>
+                      <button onClick={() => setSelectedCategory("ALL")} className="text-primary text-body-sm hover:underline">Show All Categories →</button>
+                    </div>
+                  )}
+                  {selectedCategory === "CATEGORY_C" && data.groups.unchanged.length === 0 && (
+                    <div className="p-8 text-center bg-surface-container border border-outline-variant rounded-DEFAULT space-y-2">
+                      <p className="text-body-md text-on-surface font-semibold">No equities currently in Category C: Unchanged</p>
+                      <button onClick={() => setSelectedCategory("ALL")} className="text-primary text-body-sm hover:underline">Show All Categories →</button>
+                    </div>
+                  )}
+
                   {/* CATEGORY A: NEEDS ATTENTION */}
-                  {data.groups.needsAttention.length > 0 && (
+                  {(selectedCategory === "ALL" || selectedCategory === "CATEGORY_A") && data.groups.needsAttention.length > 0 && (
                     <section className="space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2.5">
@@ -636,11 +754,11 @@ export default function SmartMarketWatchPage() {
                           return (
                             <article
                               key={stock.symbol}
-                              className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group"
+                              className="bg-surface-container border border-outline-variant hover:border-primary/50 hover:bg-surface-container-high rounded-DEFAULT p-4 transition-all duration-150 cursor-pointer relative group overflow-hidden"
                               onClick={() => openDrawer(stock.symbol)}
                             >
                               <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                                <div className="space-y-2">
+                                <div className="space-y-2 min-w-0 flex-1">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-headline-md font-headline-md font-bold text-on-surface">
                                       {stock.symbol}
@@ -652,7 +770,7 @@ export default function SmartMarketWatchPage() {
                                       Score: {stock.attentionScore}/100
                                     </span>
                                   </div>
-                                  <div className="flex items-baseline space-x-3">
+                                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                                     <span className="text-headline-lg font-headline-lg font-bold text-on-surface font-label-numeric-lg text-label-numeric-lg">
                                       ₹{stock.currentPrice.toFixed(2)}
                                     </span>
@@ -709,12 +827,33 @@ export default function SmartMarketWatchPage() {
                                         : "N/A"}
                                     </span>
                                   </div>
-                                  <button className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant group-hover:bg-primary group-hover:text-background text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant font-medium">
-                                    <span>Inspect Factors</span>
-                                    <span className="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
-                                      arrow_forward
-                                    </span>
-                                  </button>
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleMarkSingleStockChecked(stock.symbol);
+                                      }}
+                                      disabled={actionPending}
+                                      className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-DEFAULT bg-surface-variant hover:bg-primary/20 hover:text-primary text-outline border border-outline-variant text-label-numeric-sm font-label-numeric-sm transition-colors font-medium whitespace-nowrap disabled:opacity-50"
+                                      title={`Acknowledge and mark ${stock.symbol} as checked`}
+                                    >
+                                      <span className="material-symbols-outlined text-[15px]">done</span>
+                                      <span>Check</span>
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openDrawer(stock.symbol);
+                                      }}
+                                      className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-DEFAULT bg-surface-variant group-hover:bg-primary group-hover:text-background text-on-surface text-body-sm font-body-sm transition-all border border-outline-variant font-medium whitespace-nowrap"
+                                    >
+                                      <span>Inspect</span>
+                                      <span className="material-symbols-outlined text-[16px] group-hover:translate-x-0.5 transition-transform">
+                                        arrow_forward
+                                      </span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             </article>
@@ -725,7 +864,7 @@ export default function SmartMarketWatchPage() {
                   )}
 
                   {/* CATEGORY B: WORTH A LOOK */}
-                  {data.groups.worthALook.length > 0 && (
+                  {(selectedCategory === "ALL" || selectedCategory === "CATEGORY_B") && data.groups.worthALook.length > 0 && (
                     <section className="space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2.5">
@@ -778,9 +917,24 @@ export default function SmartMarketWatchPage() {
                                   {stock.volumeRatio !== null ? `Vol: ${stock.volumeRatio.toFixed(1)}x` : "Vol: N/A"}
                                 </span>
                               </div>
-                              <p className="mt-2 text-body-sm font-body-sm text-on-surface-variant">
-                                {stock.summaryExplanation || stock.reasons[0]?.value || "Observed price divergence from baseline."}
-                              </p>
+                              <div className="mt-3 pt-2.5 border-t border-outline-variant/60 flex items-center justify-between gap-2">
+                                <p className="text-body-sm font-body-sm text-on-surface-variant line-clamp-1 flex-1">
+                                  {stock.summaryExplanation || stock.reasons[0]?.value || "Observed price divergence from baseline."}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMarkSingleStockChecked(stock.symbol);
+                                  }}
+                                  disabled={actionPending}
+                                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-DEFAULT bg-surface-variant hover:bg-primary/20 hover:text-primary text-outline border border-outline-variant text-label-numeric-sm font-label-numeric-sm transition-colors font-medium whitespace-nowrap disabled:opacity-50"
+                                  title={`Acknowledge and mark ${stock.symbol} as checked`}
+                                >
+                                  <span className="material-symbols-outlined text-[15px]">done</span>
+                                  <span>Check</span>
+                                </button>
+                              </div>
                             </div>
                           );
                         })}
@@ -789,7 +943,7 @@ export default function SmartMarketWatchPage() {
                   )}
 
                   {/* CATEGORY C: UNCHANGED & NOISE FILTERED */}
-                  {data.groups.unchanged.length > 0 && (
+                  {(selectedCategory === "ALL" || selectedCategory === "CATEGORY_C") && data.groups.unchanged.length > 0 && (
                     <section className="bg-surface-container-low border border-outline-variant rounded-DEFAULT p-4 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="flex items-center space-x-2">
@@ -870,12 +1024,25 @@ export default function SmartMarketWatchPage() {
                   NSE: {selectedStock.symbol} · Significance: {selectedStock.significance}
                 </span>
               </div>
-              <button
-                className="w-8 h-8 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface-variant flex items-center justify-center transition-colors"
-                onClick={closeDrawer}
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => handleMarkSingleStockChecked(selectedStock.symbol)}
+                  disabled={actionPending}
+                  className="px-3 py-1.5 rounded-DEFAULT bg-primary text-background font-bold text-label-numeric-sm hover:bg-primary/90 flex items-center space-x-1.5 transition-transform active:scale-95 shadow-sm disabled:opacity-50"
+                  title={`Acknowledge baseline and mark ${selectedStock.symbol} as checked`}
+                >
+                  <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                  <span>Mark {selectedStock.symbol} Checked</span>
+                </button>
+                <button
+                  className="w-8 h-8 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-highest text-on-surface-variant flex items-center justify-center transition-colors"
+                  onClick={closeDrawer}
+                  title="Close (ESC)"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
             </div>
 
             {/* Drawer Body */}
@@ -906,6 +1073,22 @@ export default function SmartMarketWatchPage() {
                     </span>
                   </div>
                 </div>
+              </div>
+
+              {/* Google/Yahoo Finance Style Interactive Chart */}
+              <div>
+                <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider block mb-2 font-bold">
+                  Price Trajectory &amp; Catalyst Timeline
+                </span>
+                <InteractivePriceChart
+                  symbol={selectedStock.symbol}
+                  currentPrice={selectedStock.currentPrice}
+                  checkpointPrice={selectedStock.checkpointPrice}
+                  checkpointTime={selectedStock.observedAt || data?.lastCheckedAt}
+                  visits={selectedStock.visits}
+                  events={matchedNews}
+                  height={230}
+                />
               </div>
 
               {/* 4-Card Deterministic Fact Matrix */}
@@ -999,6 +1182,119 @@ export default function SmartMarketWatchPage() {
                   ))}
                 </div>
               </div>
+
+              {/* AI-Enriched News Catalysts Section */}
+              <div className="space-y-2.5">
+                <div className="flex items-center space-x-1.5">
+                  <span className="material-symbols-outlined text-primary text-[16px]">psychology</span>
+                  <span className="text-caption-caps font-caption-caps text-outline uppercase tracking-wider font-bold">
+                    AI-Enriched News Catalysts
+                  </span>
+                  {matchedNews.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-primary/20 text-primary text-[10px] font-bold">
+                      {matchedNews.length}
+                    </span>
+                  )}
+                </div>
+
+                {matchedNews.length === 0 ? (
+                  <div className="p-3 bg-surface rounded-DEFAULT border border-outline-variant text-center">
+                    <span className="text-outline text-body-sm">
+                      No news catalysts detected for {selectedStockSymbol} since your last checkpoint. Market intelligence pipeline is active.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {matchedNews[0]?.isFallback && (
+                      <div className="px-2.5 py-1.5 rounded-DEFAULT bg-surface-container-high border border-outline-variant/60 text-[11px] text-outline flex items-center space-x-1.5">
+                        <span className="material-symbols-outlined text-[14px] text-primary">info</span>
+                        <span>Showing broader sector &amp; benchmark catalysts impacting {selectedStockSymbol}:</span>
+                      </div>
+                    )}
+                    {matchedNews.map((ev: any) => {
+                      const upper = (selectedStockSymbol || "").toUpperCase();
+                      const isDirect = Array.isArray(ev.primarySymbols) && ev.primarySymbols.includes(upper);
+                      const isRipple = Array.isArray(ev.rippleImpacts) && ev.rippleImpacts.some((r: any) => r.symbol === upper);
+
+                      return (
+                        <div
+                          key={ev.id}
+                          className="p-3 bg-surface rounded-DEFAULT border border-outline-variant space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center space-x-1.5 flex-wrap">
+                              <span
+                                className={`px-1.5 py-0.2 rounded-DEFAULT text-[10px] font-bold font-label-numeric-sm ${
+                                  ev.sentimentScore > 0
+                                    ? "bg-primary/20 text-primary"
+                                    : ev.sentimentScore < 0
+                                    ? "bg-secondary/20 text-secondary"
+                                    : "bg-surface-variant text-outline"
+                                }`}
+                              >
+                                {ev.sentimentScore > 0 ? "Bullish" : ev.sentimentScore < 0 ? "Bearish" : "Neutral"}
+                              </span>
+                              {isDirect && (
+                                <span className="px-1.5 py-0.2 rounded-DEFAULT bg-primary/15 text-primary border border-primary/30 text-[9px] font-bold font-label-numeric-sm">
+                                  🎯 Direct Catalyst
+                                </span>
+                              )}
+                              {isRipple && !isDirect && (
+                                <span className="px-1.5 py-0.2 rounded-DEFAULT bg-surface-variant text-on-surface text-[9px] font-bold font-label-numeric-sm">
+                                  ⚡ Sector Ripple
+                                </span>
+                              )}
+                              <span className="text-[10px] font-label-numeric-sm text-outline uppercase tracking-wider">
+                                {ev.source?.replace("_", " ")}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-label-numeric-sm text-outline">
+                              {new Date(ev.occurredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                          </div>
+                          <a
+                            href={ev.url ?? "#"}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-body-sm font-semibold text-on-surface hover:text-primary transition-colors block line-clamp-2"
+                          >
+                            {ev.title}
+                          </a>
+
+                          {/* AI Share Price Impact Mechanism */}
+                          {ev.priceImpactExplanation && (
+                            <div className="p-2.5 rounded-DEFAULT bg-surface-container/70 border border-outline-variant/70 space-y-1">
+                              <div className="flex items-center space-x-1.5 text-primary">
+                                <span className="material-symbols-outlined text-[15px]">psychology</span>
+                                <span className="text-[10px] font-bold uppercase tracking-wider font-label-numeric-sm">
+                                  How this affects share price
+                                </span>
+                              </div>
+                              <p className="text-[12px] font-body-sm text-on-surface leading-relaxed">
+                                {ev.priceImpactExplanation}
+                              </p>
+                            </div>
+                          )}
+
+                          {ev.rippleImpacts?.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 pt-1 border-t border-outline-variant/40">
+                              <span className="text-[10px] text-outline font-label-numeric-sm">Second-order:</span>
+                              {ev.rippleImpacts.slice(0, 3).map((r: any) => (
+                                <span
+                                  key={r.symbol}
+                                  className="px-1.5 py-0.2 rounded-DEFAULT bg-surface-variant text-on-surface text-[10px] font-label-numeric-sm"
+                                >
+                                  ⚡ {r.symbol} ({r.impactDirection === "POSITIVE" ? "▲" : "▼"})
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Drawer Footer Actions */}
@@ -1009,71 +1305,28 @@ export default function SmartMarketWatchPage() {
               >
                 Close Panel
               </button>
-              <button
-                disabled={actionPending}
-                className="px-4 py-2 rounded-DEFAULT bg-primary-container hover:bg-primary text-on-primary-container text-body-sm font-body-sm font-semibold transition-colors disabled:opacity-50"
-                onClick={handleMarkAllAsChecked}
-              >
-                Mark All Watchlist Checked
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  disabled={actionPending}
+                  className="px-3.5 py-2 rounded-DEFAULT bg-primary text-background text-body-sm font-body-sm font-semibold transition-transform active:scale-95 disabled:opacity-50 flex items-center space-x-1.5 shadow-sm"
+                  onClick={() => handleMarkSingleStockChecked(selectedStock.symbol)}
+                >
+                  <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                  <span>Mark {selectedStock.symbol} Checked</span>
+                </button>
+                <button
+                  disabled={actionPending}
+                  className="px-3.5 py-2 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface text-body-sm font-body-sm font-semibold transition-colors disabled:opacity-50"
+                  onClick={handleMarkAllAsChecked}
+                >
+                  Mark All Watchlist Checked
+                </button>
+              </div>
             </div>
           </>
         )}
       </section>
-
-      {/* ========================================================================= */}
-      {/* DEMO SCENARIO EVALUATOR MODAL                                             */}
-      {/* ========================================================================= */}
-      {isDemoModalOpen && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-surface-container border border-outline-variant rounded-DEFAULT max-w-xl w-full p-6 space-y-5 shadow-2xl relative">
-            <div className="flex items-center justify-between border-b border-outline-variant pb-3">
-              <div className="flex items-center space-x-2">
-                <span className="material-symbols-outlined text-primary">science</span>
-                <h3 className="text-headline-sm font-headline-sm text-on-surface font-bold">
-                  Demo Scenario (Evaluator Preview)
-                </h3>
-              </div>
-              <button
-                className="text-outline hover:text-on-surface"
-                onClick={() => setIsDemoModalOpen(false)}
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <p className="text-body-md font-body-md text-on-surface-variant">
-              Test how Smart Market Watch preserves attention: Set a baseline checkpoint at 09:30 AM, step away, and return at 01:45 PM. Only meaningful price moves, volume anomalies, and catalysts are highlighted.
-            </p>
-            <div className="space-y-3 bg-surface p-4 rounded-DEFAULT border border-outline-variant">
-              <div className="flex items-center justify-between text-label-numeric-sm font-label-numeric-sm">
-                <span className="text-primary font-bold">Baseline Checkpoint (09:30 AM)</span>
-                <span className="text-outline">Baseline Established</span>
-              </div>
-              <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-                <div className="bg-primary h-full w-full"></div>
-              </div>
-              <div className="flex items-center justify-between text-body-sm font-body-sm text-outline">
-                <span>Normal Market Noise Filtered</span>
-                <span className="text-secondary font-semibold">Meaningful Moves Surfaced at T+2h</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-end space-x-3 pt-2">
-              <button
-                className="px-3 py-1.5 rounded-DEFAULT bg-surface-variant text-on-surface text-body-sm font-body-sm"
-                onClick={() => setIsDemoModalOpen(false)}
-              >
-                Close
-              </button>
-              <button
-                className="px-4 py-1.5 rounded-DEFAULT bg-primary text-on-primary text-body-sm font-body-sm font-semibold hover:bg-primary-fixed transition-all"
-                onClick={fetchDemoScenario}
-              >
-                Simulate Scenario →
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Floating Keyboard Shortcuts Helper */}
       <div className="fixed bottom-4 right-4 hidden lg:flex items-center space-x-3 px-3 py-1.5 rounded-DEFAULT bg-surface border border-outline-variant text-outline font-label-numeric-sm text-label-numeric-sm shadow-lg z-20">
@@ -1091,14 +1344,6 @@ export default function SmartMarketWatchPage() {
         >
           <kbd className="px-1 bg-surface-container-high text-on-surface rounded">ESC</kbd>
           <span>Close Drawer</span>
-        </span>
-        <span>•</span>
-        <span
-          className="flex items-center space-x-1 cursor-pointer hover:text-on-surface"
-          onClick={() => setIsDemoModalOpen(true)}
-        >
-          <kbd className="px-1 bg-surface-container-high text-on-surface rounded">Demo</kbd>
-          <span>Evaluator Scenario</span>
         </span>
       </div>
     </div>

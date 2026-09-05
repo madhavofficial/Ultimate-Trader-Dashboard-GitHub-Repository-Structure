@@ -147,3 +147,61 @@ export async function recordOrUpdateCheckpoint(userId: string) {
     });
   });
 }
+
+export async function recordOrUpdateStockCheckpoint(userId: string, symbol: string) {
+  const upper = symbol.toUpperCase();
+  const now = new Date();
+
+  // Find or create user's checkpoint
+  let checkpoint = await prisma.watchlistCheckpoint.findUnique({
+    where: { userId },
+    include: { items: true },
+  });
+
+  if (!checkpoint) {
+    checkpoint = await recordOrUpdateCheckpoint(userId);
+  }
+
+  let ltp = getLatestLtp(upper);
+  if (!ltp) {
+    const mockInst = await registerMockSymbol(upper);
+    ltp = {
+      price: mockInst.price,
+      timestamp: mockInst.lastUpdated,
+      source: "mock",
+      volume: mockInst.volume,
+    };
+  }
+
+  const benchmarkPrice = await getBenchmarkPrice();
+  const volumeBigInt = typeof ltp.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
+
+  const item = await prisma.watchlistCheckpointItem.upsert({
+    where: {
+      checkpointId_symbol: {
+        checkpointId: checkpoint!.id,
+        symbol: upper,
+      },
+    },
+    create: {
+      checkpointId: checkpoint!.id,
+      symbol: upper,
+      price: ltp.price,
+      volume: volumeBigInt,
+      benchmarkPrice,
+      sentiment: null,
+      eventCount: 0,
+      observedAt: now,
+    },
+    update: {
+      price: ltp.price,
+      volume: volumeBigInt,
+      benchmarkPrice,
+      sentiment: null,
+      eventCount: 0,
+      observedAt: now,
+    },
+  });
+
+  return item;
+}

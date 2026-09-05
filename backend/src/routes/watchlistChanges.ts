@@ -1,7 +1,7 @@
 import { Router, Response, NextFunction, Request } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { getWatchlistSummary } from "../services/watchlist/changeDetectionService";
-import { recordOrUpdateCheckpoint } from "../services/watchlist/snapshotService";
+import { recordOrUpdateCheckpoint, recordOrUpdateStockCheckpoint } from "../services/watchlist/snapshotService";
 import { getDemoScenarioSummary } from "../services/watchlist/demoScenarioService";
 
 const router = Router();
@@ -51,6 +51,31 @@ router.post("/checkpoint", async (req: AuthRequest, res: Response, next: NextFun
       message: "Watchlist state successfully acknowledged and checkpoint updated.",
       lastCheckedAt: checkpoint?.lastCheckedAt ? checkpoint.lastCheckedAt.toISOString() : new Date().toISOString(),
       itemCount: checkpoint?.items.length ?? 0,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
+ * POST /watchlist/checkpoint/:symbol
+ * Meaning: "Mark stock as checked" - records an acknowledged checkpoint for a single stock
+ */
+router.post("/checkpoint/:symbol", async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const rawSymbol = Array.isArray(req.params.symbol) ? req.params.symbol[0] : req.params.symbol;
+    const symbol = (rawSymbol || "").toUpperCase();
+    if (!symbol) {
+      return res.status(400).json({ ok: false, message: "Symbol parameter is required" });
+    }
+
+    const item = await recordOrUpdateStockCheckpoint(req.user!.id, symbol);
+    return res.json({
+      ok: true,
+      message: `${symbol} baseline successfully acknowledged and checkpoint updated.`,
+      symbol,
+      observedAt: item.observedAt.toISOString(),
+      checkpointPrice: Number(item.price),
     });
   } catch (error) {
     return next(error);

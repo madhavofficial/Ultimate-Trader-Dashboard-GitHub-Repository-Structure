@@ -14,6 +14,13 @@ export interface DeterministicReason {
   significance: "HIGH" | "MEDIUM" | "NEUTRAL";
 }
 
+export interface CheckpointVisit {
+  time: number; // Unix seconds
+  price: number;
+  label: string; // e.g. "Visit #1", "Visit #2", "Last Checkout", "Current Spot"
+  volume?: number;
+}
+
 export interface WatchlistChangeItem {
   symbol: string;
   currentPrice: number;
@@ -31,6 +38,7 @@ export interface WatchlistChangeItem {
   freshness: MarketFreshnessState;
   observedAt: number;               // Epoch milliseconds
   eventContinuityKey: string;       // Stable signature to avoid alert fatigue on small incremental ticks
+  visits?: CheckpointVisit[];
 }
 
 export interface WatchlistSummaryResponse {

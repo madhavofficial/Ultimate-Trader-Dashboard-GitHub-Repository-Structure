@@ -107,6 +107,18 @@ const SAMPLE_MARKET_FEED: Array<Omit<RawNewsArticle, "id" | "publishedAt">> = [
     summary: "RIL subsidiary ramps up high-density local delivery infrastructure to capture fast-growing grocery and consumer electronics market share.",
     url: "https://financialexpress.com/industry/reliance-retail-quick-commerce",
   },
+  {
+    source: "ECONOMIC_TIMES",
+    title: "HDFC Bank expands advances by 14.8% YoY; Net interest margins stabilize across retail and SME portfolios",
+    summary: "India's leading private lender reports accelerating mortgage disbursement, resilient asset quality, and robust deposit accretion post-merger integration.",
+    url: "https://economictimes.indiatimes.com/industry/banking/finance/hdfc-bank-advances-growth",
+  },
+  {
+    source: "MINT_COMPANIES",
+    title: "Tata Motors domestic commercial vehicle sales grow 8%; EV passenger fleet hits record monthly deliveries",
+    summary: "Tata Motors demonstrates resilient medium and heavy commercial vehicle margins while expanding localized battery pack assembly and supply chain efficiencies.",
+    url: "https://livemint.com/auto/tata-motors-sales-growth",
+  },
 ];
 
 
@@ -138,6 +150,7 @@ export async function processNewsArticle(io: Server | null, article: RawNewsArti
         transmissionPath: enriched.transmissionPath,
         rippleImpacts: enriched.rippleImpacts,
         reasoning: enriched.reasoning,
+        priceImpactExplanation: enriched.priceImpactExplanation,
         publishedAt: article.publishedAt.toISOString(),
       },
       occurredAt: article.publishedAt,

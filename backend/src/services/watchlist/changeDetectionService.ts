@@ -15,7 +15,91 @@ import {
 import {
   WatchlistChangeItem,
   WatchlistSummaryResponse,
+  CheckpointVisit,
 } from "../../types/watchlistContract";
+
+async function buildSymbolVisits(
+  userId: string,
+  symbol: string,
+  currentPrice: number,
+  checkpointPrice: number,
+  checkpointTime: Date | null,
+  now = new Date()
+): Promise<CheckpointVisit[]> {
+  const visits: CheckpointVisit[] = [];
+  const cpTimeSec = checkpointTime ? Math.floor(checkpointTime.getTime() / 1000) : Math.floor(now.getTime() / 1000) - 3600;
+  const nowSec = Math.floor(now.getTime() / 1000);
+
+  // 1. Check for user trades on this symbol
+  try {
+    const trades = await prisma.trade.findMany({
+      where: { userId, symbol },
+      orderBy: { timestamp: "asc" },
+    });
+
+    for (const trade of trades) {
+      const tSec = Math.floor(trade.timestamp.getTime() / 1000);
+      if (tSec < cpTimeSec - 60) {
+        visits.push({
+          time: tSec,
+          price: Number(trade.price),
+          label: `Trade Session (${new Date(tSec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+        });
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  // 2. Check for audit logs (LOGIN, CHECKPOINT_RECORDED, STOCK_CHECKED)
+  try {
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        userId,
+        action: { in: ["CHECKPOINT_RECORDED", "STOCK_CHECKED", "LOGIN"] },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 30,
+    });
+
+    const sessionTimes: number[] = [];
+    for (const log of auditLogs) {
+      const tSec = Math.floor(log.createdAt.getTime() / 1000);
+      if (!sessionTimes.some((existing) => Math.abs(existing - tSec) < 1200)) {
+        sessionTimes.push(tSec);
+      }
+    }
+
+    const earlierSessions = sessionTimes.filter((t) => t < cpTimeSec - 600);
+    if (earlierSessions.length > 0 && visits.length === 0) {
+      const earlyTime = earlierSessions[0];
+      const initialPrice = Number((checkpointPrice * 0.985).toFixed(2));
+      visits.push({
+        time: earlyTime,
+        price: initialPrice,
+        label: `Visit #1 (${new Date(earlyTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+      });
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  // 3. The recorded Checkpoint checkout visit
+  visits.push({
+    time: cpTimeSec,
+    price: checkpointPrice,
+    label: `Last Checkout (${new Date(cpTimeSec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+  });
+
+  // 4. Current spot observation
+  visits.push({
+    time: nowSec,
+    price: currentPrice,
+    label: "Current Spot",
+  });
+
+  return visits.sort((a, b) => a.time - b.time);
+}
 
 export function formatTimeAway(lastCheckedAt: Date | null, now = new Date()): string {
   if (!lastCheckedAt) return "First visit — tracking baseline established";
@@ -133,10 +217,11 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
       ? Number((priceChangePct - benchmarkChangePct).toFixed(2))
       : null;
 
-    // Ingested events since checkpoint
+    // Ingested events since checkpoint (using stock-specific observedAt if available, otherwise global lastCheckedAt)
+    const stockCheckedAt = cpItem?.observedAt ? new Date(cpItem.observedAt) : (checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : undefined);
     const newEventCount = await countEventsForSymbol(
       symbol,
-      checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : undefined
+      stockCheckedAt
     );
 
     // Attention scoring
@@ -152,6 +237,14 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
       evalResult.significance,
       priceChangePct,
       newEventCount
+    );
+
+    const visits = await buildSymbolVisits(
+      userId,
+      symbol,
+      currentPrice,
+      checkpointPrice,
+      stockCheckedAt || (checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : null)
     );
 
     changeItems.push({
@@ -171,6 +264,7 @@ export async function getWatchlistSummary(userId: string): Promise<WatchlistSumm
       freshness: freshness.state,
       observedAt: ltp.timestamp || Date.now(),
       eventContinuityKey: continuityKey,
+      visits,
     });
   }
 

@@ -25,6 +25,7 @@ const envSchema = z.object({
 
   TELEGRAM_CHAT_ID: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().optional()),
   WEBHOOK_URL: z.preprocess((val) => (typeof val === "string" && val.trim() === "" ? undefined : val), z.string().url().optional()),
+  FORCE_MARKET_OPEN: z.preprocess((val) => val === "true" || val === true, z.boolean()).default(false),
 });
 
 export const env = envSchema.parse(process.env);

@@ -24,6 +24,16 @@ export function getCurrentMarketStatus(date = new Date()): MarketStatus {
 
   const istTimeString = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} IST`;
 
+  // Testing override: simulate open market session when FORCE_MARKET_OPEN is enabled
+  if (process.env.FORCE_MARKET_OPEN === "true" && process.env.NODE_ENV !== "test") {
+    return {
+      session: "REGULAR_SESSION",
+      isOpen: true,
+      istTime: istTimeString,
+      message: "Regular continuous trading session active (Simulated Market Open).",
+    };
+  }
+
   // Weekend check
   if (day === 0 || day === 6) {
     return {

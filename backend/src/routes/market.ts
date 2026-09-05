@@ -112,7 +112,20 @@ router.get("/candles", async (req: AuthRequest, res, next) => {
     const count = z.coerce.number().min(10).max(300).default(60).parse(req.query.count);
     const intervalParam = z.enum(["minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"]).default("5minute").parse(req.query.interval);
     const candles = await fetchKiteHistoricalCandles(req.user!.id, symbol, intervalParam, count);
-    return res.json({ ok: true, symbol, candles });
+
+    if (candles.length > 0) {
+      return res.json({ ok: true, symbol, candles, hasContinuousData: true, source: "kite" });
+    }
+
+    // When Kite historical series is unavailable, do NOT fabricate fake continuous candles.
+    // Return empty candles so client displays discrete checkout observation points honestly.
+    return res.json({
+      ok: true,
+      symbol,
+      candles: [],
+      hasContinuousData: false,
+      source: "discrete_checkpoints",
+    });
   } catch (error) {
     return next(error);
   }

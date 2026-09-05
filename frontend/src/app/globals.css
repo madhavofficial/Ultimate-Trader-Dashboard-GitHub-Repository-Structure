@@ -63,7 +63,7 @@
 * { box-sizing: border-box; }
 .shell { min-height: 100vh; padding: 24px; max-width: 1540px; margin: 0 auto; }
 .muted { color: var(--muted); font-size: 13px; }
-.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.shell .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
 .wide { grid-column: span 8; }
 .side { grid-column: span 4; }

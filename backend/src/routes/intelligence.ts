@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "../db/client";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { syncNewsFeed } from "../workers/newsWorker";
-import { SECTOR_KNOWLEDGE_GRAPH } from "../services/sentiment";
+import { SECTOR_KNOWLEDGE_GRAPH, generatePriceImpactExplanation, EventType } from "../services/sentiment";
 
 const router = Router();
 router.use(authMiddleware);
@@ -18,21 +18,31 @@ router.get("/events", async (_req: AuthRequest, res, next) => {
 
     const parsedEvents = events.map((event) => {
       const payload = event.payload as Record<string, any>;
+      const title = payload?.title ?? "Market Announcement";
+      const summary = payload?.summary ?? "";
+      const primarySymbols = payload?.primarySymbols ?? [];
+      const eventType = (payload?.eventType ?? event.type) as EventType;
+      const sentimentScore = payload?.sentimentScore ?? 0;
+      const priceImpactExplanation =
+        payload?.priceImpactExplanation ||
+        generatePriceImpactExplanation(title, summary, primarySymbols, eventType, sentimentScore);
+
       return {
         id: event.id,
         type: event.type,
         source: event.source,
-        title: payload?.title ?? "Market Announcement",
-        summary: payload?.summary ?? "",
+        title,
+        summary,
         url: payload?.url,
-        eventType: payload?.eventType ?? event.type,
-        primarySymbols: payload?.primarySymbols ?? [],
-        sentimentScore: payload?.sentimentScore ?? 0,
+        eventType,
+        primarySymbols,
+        sentimentScore,
         confidence: payload?.confidence ?? 0.7,
         impactHorizon: payload?.impactHorizon ?? "SHORT_TERM",
         transmissionPath: payload?.transmissionPath ?? "DIRECT",
         rippleImpacts: payload?.rippleImpacts ?? [],
         reasoning: payload?.reasoning ?? "",
+        priceImpactExplanation,
         occurredAt: event.occurredAt,
       };
     });

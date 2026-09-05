@@ -212,6 +212,18 @@ Checkpoints persist user state across browser sessions and devices using Postgre
 - **"Mark Checkpoint" Action (`POST /watchlist/checkpoint`):** Acknowledges the current state. An atomic Prisma transaction updates `lastCheckedAt` to `now()` and replaces all checkpoint items with current prices and volumes.
 - **User Isolation:** All checkpoints are scoped to the authenticated user ID (`userId` verified via JWT). Checkpoint mutations by one user never affect another.
 
+## Time Machine Replay & Live Ticker Streaming
+
+The watchlist now supports temporal navigation across persisted market baselines while continuing to receive live price updates:
+
+- **Checkpoint Replay:** Users can compare watchlist deltas against the last active checkpoint, previous historical checkpoints from the audit log, the market open baseline (09:15 IST), or yesterday's close baseline (15:30 IST).
+- **Live Ticker Streaming:** Socket.io streams real-time price ticks to the frontend with sub-100ms update latency when a live ticker source is active.
+- **Category A Escalation Alerts:** Instruments escalating to `NEEDS_ATTENTION` can trigger a D5/A5 dual-tone audio chime, browser desktop notifications after permission is granted, and alert toasts in a floating sidebar.
+- **Baseline Navigation:** A baseline dropdown selects the comparison point for replay mode, while category filters limit the briefing to `Category A`, `Category B`, `Category C`, or all instruments.
+- **Live Delta Refresh:** The frontend polls for live deltas every 60 seconds and uses green or red visual flash indicators for price ticks.
+
+The replay and streaming workflow is exposed through `GET /watchlist/checkpoints`, `GET /watchlist/summary?baseline=<id>`, and `GET /broker/kite/status`.
+
 ---
 
 ## Market Freshness & Data Quality
@@ -279,6 +291,19 @@ The application decouples market math from natural language processing across tw
 > **Core Architectural Principle:**  
 > *"AI enriches the incoming event/news signal; deterministic domain logic makes the watchlist decision."*
 
+## Interactive Price Chart & Catalyst Timeline
+
+The watchlist provides an interactive visual history for understanding price movement alongside the events that may have influenced it:
+
+- **Checkpoint Visit Points:** Historical checkpoint visits are rendered as discrete points on the price chart.
+- **Collision-Free Catalyst Timeline:** Catalyst labels are positioned to remain readable without overlapping neighboring events.
+- **Live Stream Overlay:** A streaming tick curve is layered over the historical chart whenever the WebSocket connection is active.
+- **Points / Stream Views:** Users can toggle between historical checkpoint points and the live tick stream.
+- **News Catalyst Enrichment:** Events support direct ticker matches (`primary symbol`), sector ripple impacts (`second-order transmission`), dynamic symbol extraction, and macroeconomic fallback handling for broad market catalysts.
+- **AI Price Impact Explanation:** `generatePriceImpactExplanation()` translates bullish or bearish events into actionable narratives covering margin, cash flow, and valuation mechanics.
+- **Single-Stock Checkpoints:** `POST /watchlist/checkpoint/:symbol` atomically acknowledges an individual stock without requiring a full watchlist checkpoint.
+- **Enhanced News Worker:** Additional sample articles cover HDFC Bank and Tata Motors. Multi-provider LLM fallback supports Groq (`qwen3.8-27b`) and OpenAI (`gpt-oss-20b`) with a 7-second timeout and graceful offline NLP degradation.
+
 ---
 
 ## System Architecture
@@ -323,13 +348,17 @@ flowchart TD
 
 ## Verified API Routes
 
-All endpoints below are verified in [`backend/src/routes/watchlistChanges.ts`](backend/src/routes/watchlistChanges.ts):
+The key watchlist endpoints below are verified in [`backend/src/routes/watchlistChanges.ts`](backend/src/routes/watchlistChanges.ts):
 
 | Route | Method | Access | Purpose |
 | :--- | :---: | :---: | :--- |
 | `/watchlist/summary` | `GET` | Authenticated | Returns the complete watchlist briefing comparing current market state against the user's stored checkpoint. |
 | `/watchlist/checkpoint` | `POST` | Authenticated | Acknowledges current market state and atomically snapshots new prices and volumes into PostgreSQL. |
+| `/watchlist/checkpoints` | `GET` | Authenticated | Returns available historical checkpoints for time machine replay. |
+| `/watchlist/checkpoint/:symbol` | `POST` | Authenticated | Atomically acknowledges the current state of one watchlist symbol. |
+| `/watchlist/summary?baseline=<id>` | `GET` | Authenticated | Returns the watchlist briefing relative to a selected historical baseline. |
 | `/watchlist/demo-scenario` | `POST`/`GET` | Public / Demo | Returns an in-memory, isolated evaluation fixture (`demoScenarioService.ts`) without touching database state. |
+| `/broker/kite/status` | `GET` | Authenticated | Reports the current Zerodha Kite connection status. |
 
 *(Note: On the `hackathon-scenarios` submission branch, additional `/watchlist/scenario` routes provide dynamic market simulation injection).*
 
@@ -345,6 +374,29 @@ To enable reproducible evaluation outside exchange trading hours or during quiet
 | **Interactive Scenario Controller** | 6 live market scenarios (`baseline`, `big_move`, `volume_spike`, `stale`, `market_closed`, `unchanged`). | Available on the **`hackathon-scenarios`** submission branch with an interactive live scenario switcher toolbar. |
 
 *Note: Evaluator scenarios are isolated testing fixtures and do not mutate real user database checkpoints.*
+
+---
+
+## Production Hardening & Security
+
+Production configuration now separates demonstration behavior from deployed trading infrastructure:
+
+- **Credential Injection:** Hardcoded test-account quick-fill buttons were removed from the frontend. Credentials and secrets are sourced from environment variables only.
+- **Strict CORS Enforcement:** `CORS_ORIGIN` accepts a comma-separated origin list. Production blocks development origins such as `localhost`, while non-production environments retain development defaults.
+- **Demo Endpoint Gating:** `/watchlist/demo-scenario` returns `404` in production, and demo-mode queries are blocked when `NODE_ENV=production`.
+- **Market Hours Override Hardening:** `FORCE_MARKET_OPEN` applies only to real-time queries, is ignored in production, and does not affect the test suite.
+- **Independent Socket Configuration:** `NEXT_PUBLIC_SOCKET_URL` configures the WebSocket endpoint separately from `NEXT_PUBLIC_API_URL`, allowing HTTP and WebSocket backends to scale independently.
+
+---
+
+## Seamless Registration & Auto-Login
+
+Registration now completes the first authenticated session without a redundant login step:
+
+- **Instant JWT Issuance:** `POST /register` returns `{ ok: true, user, accessToken }` immediately after successful registration.
+- **Automatic Refresh Session:** A refresh token is created and stored in a secure HTTP-only cookie.
+- **Frontend Auto-Login:** The frontend stores the returned access token in `localStorage` and redirects the new user directly into the authenticated experience.
+- **Atomic Registration Flow:** User creation, token issuance, and the audit log are completed in one transaction.
 
 ---
 

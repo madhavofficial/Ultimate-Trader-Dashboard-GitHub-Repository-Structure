@@ -448,8 +448,12 @@ export default function DashboardPage() {
       });
       const body = await res.json();
       if (!res.ok) return setTradeMessage(body.error ?? "Authentication failed");
-      localStorage.setItem("accessToken", body.accessToken ?? "");
-      setToken(body.accessToken ?? null);
+      if (body.accessToken) {
+        localStorage.setItem("accessToken", body.accessToken);
+        setToken(body.accessToken);
+      } else if (path === "register") {
+        return authenticate("login");
+      }
     } catch {
       setTradeMessage("Server connection error");
     }

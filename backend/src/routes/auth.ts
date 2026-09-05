@@ -62,7 +62,12 @@ router.post("/register", authLimiter, async (req, res, next) => {
       select: { id: true, email: true },
     });
     await writeAuditLog({ userId: user.id, action: "REGISTER", entityType: "User", entityId: user.id, request: req });
-    return res.status(201).json({ ok: true, user });
+    const refreshToken = issueRefreshToken(user);
+    await prisma.refreshToken.create({
+      data: { tokenHash: hashToken(refreshToken), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), userId: user.id },
+    });
+    res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions());
+    return res.status(201).json({ ok: true, user, accessToken: issueAccessToken(user) });
   } catch (error) {
     return next(error);
   }

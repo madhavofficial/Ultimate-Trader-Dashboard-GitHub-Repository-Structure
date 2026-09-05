@@ -112,7 +112,7 @@ A conventional watchlist treats every sub-tick price jitter as equal. Smart Mark
 
 ## Mathematical Determinism & Core Concepts
 
-A critical engineering requirement of Smart Market Watchlist is **100% mathematical reproducibility**. Given identical market inputs and the same historical checkpoint, the system must evaluate and categorize an instrument identically every single time — with zero stochastic drift, zero temperature variation, and strictly predictable outputs.
+The watchlist decision engine is **deterministic and reproducible given identical market, checkpoint, and event inputs**. Given identical market prices, volume baselines, benchmark data, and catalyst inputs against the same historical checkpoint, the core evaluation system categorizes an instrument identically every single time — with zero stochastic drift, zero temperature variation, and strictly predictable mathematical outputs. (Note: This determinism applies strictly to the core watchlist scoring and triage engine; the optional news/LLM pipeline runs asynchronously as an auxiliary signal enrichment process).
 
 ### The 4 Core Principles of Deterministic Design
 
@@ -247,14 +247,37 @@ High-Fidelity Mock Stream (Default) ──┘    (Price, Volume, Timestamp)
 
 ---
 
-## News & Event Ingestion Pipeline
+## News & Event Ingestion Pipeline: AI Enrichment & Deterministic Fallback
 
-1. **Scraping:** Background worker ([`newsWorker.ts`](backend/src/workers/newsWorker.ts)) polls major Indian financial RSS feeds (`Economic Times`, `LiveMint`, `MoneyControl`, `Business Standard`) on a 60-second schedule.
-2. **Enrichment:** Passes headline and summary to [`analyzeNewsAsync()`](backend/src/services/sentiment.ts):
-   - **LLM Call (When Configured):** Calls Groq (`openai-oss-120b`), Gemini (`gemini-3.8-flash`), or OpenAI (`gpt-5.6-luna-medium`) with a 5-second timeout, extracting `eventType`, `primarySymbols`, `sentimentScore`, and second-order `rippleImpacts`.
-   - **Offline Deterministic Fallback:** If API keys are absent or requests fail, executes [`analyzeNewsText()`](backend/src/services/sentiment.ts) using keyword dictionaries ([`SYMBOL_KEYWORDS`](backend/src/services/sentiment.ts)) and a hardcoded Indian market [`SECTOR_KNOWLEDGE_GRAPH`](backend/src/services/sentiment.ts).
-3. **Persistence:** Saves enriched records to the PostgreSQL `Event` table, deduplicated via SHA-256 hash (`source:externalId`).
-4. **Watchlist Link:** The watchlist snapshot service queries `countEventsForSymbol(symbol, checkpointDate)` to increment `newEventCount`.
+The application decouples market math from natural language processing across two distinct layers:
+
+### 1. Deterministic Market Intelligence (Core Engine)
+- **Checkpoint Comparison:** Evaluates market transitions relative to the user's persisted baseline ($T_{\text{checkpoint}} \rightarrow T_{\text{now}}$).
+- **Price Delta ($\Delta P\%$):** Pure percentage change since checkpoint.
+- **Volume Pace Ratio ($V_{\text{ratio}}$):** Evaluated against baseline volume; must exceed $1.0\times$ before contributing points.
+- **Benchmark Alpha ($\alpha$):** Stock percentage move relative to NIFTY 50 index over the identical interval.
+- **Catalyst Signal ($C$):** Integer count of new corporate/macro events recorded since checkpoint.
+- **Attention Score (0–100):** Mathematically bounded, hand-engineered formula with explicit saturation ceilings.
+- **Temporal Freshness:** 5-state state machine enforcing market hours and feed latency rules.
+- **Deterministic Reason Badges:** Factual, rule-based category tags (`PRICE`, `VOLUME`, `BENCHMARK`, `CATALYST`) explaining *why* an instrument is prioritized.
+
+### 2. News / Event Intelligence (Auxiliary Pipeline)
+- **RSS Ingestion:** Background worker ([`newsWorker.ts`](backend/src/workers/newsWorker.ts)) polls Indian financial RSS feeds (`Economic Times`, `LiveMint`, `MoneyControl`, `Business Standard`) on a 60-second schedule.
+- **Financial News Processing:** Extracts raw headlines, summaries, publication timestamps, and source URLs.
+- **Optional Multi-Provider LLM Enrichment ([`sentiment.ts`](backend/src/services/sentiment.ts)):**
+  - **Groq:** Default model `openai-oss-120b` (override via `GROQ_MODEL`), endpoint `https://api.groq.com/openai/v1/chat/completions`.
+  - **Google Gemini:** Default model `gemini-3.8-flash` (override via `GEMINI_MODEL`), endpoint `https://generativelanguage.googleapis.com/v1beta/models/...`.
+  - **OpenAI:** Default model `gpt-5.6-luna-medium` (override via `OPENAI_MODEL`), endpoint `https://api.openai.com/v1/chat/completions`.
+  - **Guardrails:** All LLM calls execute with structured Zod schema validation (`llmOutputSchema`), temperature `0.1`, and a strict 5-second `AbortController` timeout to extract `eventType`, `primarySymbols`, `sentimentScore`, and second-order `rippleImpacts`.
+- **Deterministic Offline Fallback:**
+  - If API keys are omitted or external calls fail/timeout, the system invokes [`analyzeNewsText()`](backend/src/services/sentiment.ts) / [`analyzeEventOffline()`](backend/src/services/sentiment.ts).
+  - Uses regex dictionary matching ([`SYMBOL_KEYWORDS`](backend/src/services/sentiment.ts)) and a hardcoded Indian equity sector transmission graph ([`SECTOR_KNOWLEDGE_GRAPH`](backend/src/services/sentiment.ts)) to model supply-chain and commodity impacts (e.g. crude oil surges impacting paints and aviation).
+- **Persistence & Watchlist Linkage:**
+  - Saves enriched events into the PostgreSQL `Event` table, deduplicated via SHA-256 hash (`source:externalId`).
+  - The watchlist snapshot service queries `countEventsForSymbol(symbol, checkpointDate)` to increment the catalyst signal count ($C$).
+
+> **Core Architectural Principle:**  
+> *"AI enriches the incoming event/news signal; deterministic domain logic makes the watchlist decision."*
 
 ---
 

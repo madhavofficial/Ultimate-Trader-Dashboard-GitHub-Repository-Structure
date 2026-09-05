@@ -1,4 +1,5 @@
 import { Router, Response, NextFunction, Request } from "express";
+import { env } from "../config/env";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { getWatchlistSummary, getAvailableCheckpoints } from "../services/watchlist/changeDetectionService";
 import { recordOrUpdateCheckpoint, recordOrUpdateStockCheckpoint } from "../services/watchlist/snapshotService";
@@ -8,12 +9,15 @@ const router = Router();
 
 /**
  * POST & GET /watchlist/demo-scenario
- * Explicitly unauthenticated, demo-scoped evaluator endpoint.
+ * Explicitly unauthenticated, demo-scoped evaluator endpoint (disabled in production).
  * - Operates entirely in-memory and isolated.
  * - Does NOT access or query any real user database state.
  * - Does NOT mutate any checkpoints or watchlist items.
  */
 router.all("/demo-scenario", (_req: Request, res: Response) => {
+  if (env.NODE_ENV === "production") {
+    return res.status(404).json({ error: "Endpoint not found" });
+  }
   const summary = getDemoScenarioSummary("demo-evaluator");
   return res.json(summary);
 });
@@ -41,7 +45,7 @@ router.get("/checkpoints", async (req: AuthRequest, res: Response, next: NextFun
  */
 router.get(["/summary", "/changes"], async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const isDemo = req.query.demo === "true";
+    const isDemo = env.NODE_ENV !== "production" && req.query.demo === "true";
     if (isDemo) {
       return res.json(getDemoScenarioSummary(req.user!.id));
     }

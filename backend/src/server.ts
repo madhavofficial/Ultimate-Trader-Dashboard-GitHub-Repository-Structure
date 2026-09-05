@@ -29,10 +29,13 @@ import { startRetentionScheduler } from "./services/retentionService";
 
 
 
-const corsOrigins = [env.CORS_ORIGIN, "http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001"];
+const configuredOrigins = env.CORS_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean);
+const devOrigins = ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001"];
+const allowedOrigins = env.NODE_ENV === "production" ? configuredOrigins : [...configuredOrigins, ...devOrigins];
+
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    if (!origin || corsOrigins.includes(origin) || (env.NODE_ENV !== "production" && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) {
+    if (!origin || allowedOrigins.includes(origin) || (env.NODE_ENV !== "production" && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));

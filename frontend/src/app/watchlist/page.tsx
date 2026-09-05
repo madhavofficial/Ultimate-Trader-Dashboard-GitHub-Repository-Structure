@@ -13,6 +13,7 @@ import {
 import InteractivePriceChart from "../../components/InteractivePriceChart";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || API_URL;
 
 export default function SmartMarketWatchPage() {
   const router = useRouter();
@@ -230,7 +231,7 @@ export default function SmartMarketWatchPage() {
     const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
     if (!token) return;
 
-    const socket: Socket = io(API_URL, {
+    const socket: Socket = io(SOCKET_URL, {
       auth: { token },
       transports: ["websocket", "polling"],
     });

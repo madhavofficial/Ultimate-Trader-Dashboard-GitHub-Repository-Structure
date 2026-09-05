@@ -830,34 +830,6 @@ export default function DashboardPage() {
             </button>
           </form>
 
-          {/* Quick Demo Login Preset Helper */}
-          <div className="pt-2 border-t border-outline-variant">
-            <span className="text-[11px] font-label-numeric-sm uppercase tracking-wider text-outline block mb-2">
-              Quick Fill Credentials
-            </span>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setEmail("qa_trader_prod@example.com");
-                  setPassword("SecurePassword123!");
-                }}
-                className="px-2.5 py-1 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-label-numeric-sm text-on-surface transition-colors"
-              >
-                QA Trader
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmail("demo@example.com");
-                  setPassword("ChangeMe123!");
-                }}
-                className="px-2.5 py-1 rounded-DEFAULT bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-label-numeric-sm text-on-surface transition-colors"
-              >
-                Demo Trader
-              </button>
-            </div>
-          </div>
 
           {tradeMessage && (
             <div className="p-3 bg-error-container/20 border border-error-container rounded-DEFAULT text-error text-body-sm font-medium flex items-center space-x-2">

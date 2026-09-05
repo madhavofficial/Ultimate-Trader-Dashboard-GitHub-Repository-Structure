@@ -8,7 +8,9 @@ export interface MarketStatus {
   message: string;
 }
 
-export function getCurrentMarketStatus(date = new Date()): MarketStatus {
+export function getCurrentMarketStatus(customDate?: Date): MarketStatus {
+  const isSpecificDate = customDate !== undefined;
+  const date = customDate ?? new Date();
   const parts = new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
     weekday: "short",
@@ -24,8 +26,8 @@ export function getCurrentMarketStatus(date = new Date()): MarketStatus {
 
   const istTimeString = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} IST`;
 
-  // Testing override: simulate open market session when FORCE_MARKET_OPEN is enabled
-  if (process.env.FORCE_MARKET_OPEN === "true" && process.env.NODE_ENV !== "test") {
+  // Testing override: simulate open market session when FORCE_MARKET_OPEN is enabled (non-production and current time queries only)
+  if (!isSpecificDate && process.env.FORCE_MARKET_OPEN === "true" && process.env.NODE_ENV !== "test" && process.env.NODE_ENV !== "production") {
     return {
       session: "REGULAR_SESSION",
       isOpen: true,

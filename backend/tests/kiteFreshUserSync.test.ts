@@ -12,7 +12,7 @@ import {
 import { createMarketDataProvider, resolveSymbolPrice, setMarketDataProvider } from "../src/services/marketDataProvider";
 import { getWatchlistSummary } from "../src/services/watchlist/changeDetectionService";
 
-import { KiteTicker } from "kiteconnect";
+import { KiteConnect, KiteTicker } from "kiteconnect";
 
 const DUMMY_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -325,13 +325,12 @@ test("Kite Fresh-User Onboarding & Instrument Synchronization Suite", async (t) 
 
   // ── F. OAuth callback returns truthful status when live-stream fails ───────
   await t.test("F: OAuth callback succeeds in persisting session even when live-stream startup fails", async () => {
-    // When live-stream cannot start (e.g. instrument sync failure),
-    // the callback returns ok: true, streamStarted: false, streamError: ...
     const { app } = await import("../src/server");
     const http = await import("node:http");
     const jwt = await import("jsonwebtoken");
 
     const server = http.createServer(app);
+    app.set("io", { emit: () => {}, to: () => ({ emit: () => {} }) } as any);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const address = server.address() as { port: number };
     const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -341,35 +340,73 @@ test("Kite Fresh-User Onboarding & Instrument Synchronization Suite", async (t) 
       data: { id: testUserId, email: `oauth-f-${Date.now()}@test.invalid`, passwordHash: "h" },
     });
 
-    try {
-      // Create state JWT
-      const state = jwt.sign({ purpose: "kite-oauth", userId: testUserId }, env.JWT_ACCESS_SECRET, { expiresIn: "10m" });
+    const origGenerateSession = KiteConnect.prototype.generateSession;
+    const origGetProfile = KiteConnect.prototype.getProfile;
+    const savedMode = env.MARKET_DATA_MODE;
 
-      // Note: If Kite API is not reachable, completeKiteLogin would fail.
-      // But we verify that if a session IS persisted, the callback response shape matches our contract.
-      // We test the contract directly:
-      const savedMode = env.MARKET_DATA_MODE;
+    try {
+      // Mock KiteConnect login methods to return a valid session and profile without external API calls
+      (KiteConnect.prototype as any).generateSession = async function () {
+        return {
+          user_id: "BROKER_F_USER",
+          user_name: "Mock Trader",
+          access_token: "mock-valid-access-token-f",
+          public_token: "mock-public-token",
+          login_time: new Date().toISOString(),
+        };
+      };
+
+      (KiteConnect.prototype as any).getProfile = async function () {
+        return {
+          user_id: "BROKER_F_USER",
+          user_name: "Mock Trader",
+          user_shortname: "Trader",
+          avatar_url: null,
+          broker: "ZERODHA",
+          email: "trader-f@test.invalid",
+        };
+      };
+
       (env as any).MARKET_DATA_MODE = "kite";
 
-      // Clear instruments to guarantee failure of ensureInstrumentsAvailable
+      // Clear instruments table to ensure master catalog is unpopulated
       await prisma.instrument.deleteMany();
 
-      // Mock fetch failure on kite.trade
+      // Mock fetch failure specifically for api.kite.trade/instruments to simulate sync failure
       globalThis.fetch = async (url: any, init?: any) => {
-        if (typeof url === "string" && url.includes("api.kite.trade")) {
-          return new Response("Simulated failure", { status: 503 });
+        if (typeof url === "string" && url.includes("api.kite.trade/instruments")) {
+          return new Response("Simulated instrument download failure", { status: 503 });
         }
         return originalFetch(url, init);
       };
 
-      const res = await fetch(`${baseUrl}/broker/kite/callback?state=${state}&request_token=invalid_simulated_token`);
-      // Since request_token is simulated, completeKiteLogin will throw 500/503 from KiteConnect
-      // which is expected because no session was generated.
-      assert.ok(res.status >= 400);
+      const state = jwt.sign({ purpose: "kite-oauth", userId: testUserId }, env.JWT_ACCESS_SECRET, { expiresIn: "10m" });
 
-      (env as any).MARKET_DATA_MODE = savedMode;
+      const res = await fetch(`${baseUrl}/broker/kite/callback?state=${state}&request_token=valid_simulated_token`);
+      assert.equal(res.status, 200, "OAuth callback must return HTTP 200");
+
+      const body = await res.json();
+      assert.deepEqual(body, {
+        ok: true,
+        provider: "ZERODHA",
+        brokerUserId: "BROKER_F_USER",
+        streamStarted: false,
+        streamError: "Instrument catalog synchronization failed; live market stream could not be started",
+      });
+
+      // Verify that the BrokerSession was persisted and remains present in PostgreSQL
+      const persistedSession = await prisma.brokerSession.findUnique({
+        where: { userId_provider: { userId: testUserId, provider: "ZERODHA" } },
+      });
+      assert.ok(persistedSession, "BrokerSession must remain persisted in DB after stream failure");
+      assert.equal(persistedSession!.brokerUserId, "BROKER_F_USER");
+      assert.ok(persistedSession!.accessTokenEncrypted.length > 0, "Encrypted access token must be present");
     } finally {
+      (KiteConnect.prototype as any).generateSession = origGenerateSession;
+      (KiteConnect.prototype as any).getProfile = origGetProfile;
+      (env as any).MARKET_DATA_MODE = savedMode;
       server.close();
+      await prisma.brokerSession.deleteMany({ where: { userId: testUserId } });
       await prisma.user.deleteMany({ where: { id: testUserId } });
     }
   });

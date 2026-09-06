@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
+import { Server } from "socket.io";
 import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { completeKiteLogin, createKiteLoginUrl, syncKiteAccount, syncKiteHoldings } from "../services/kiteService";
 import { writeAuditLog } from "../services/auditLog";
 import { startKiteTicker, stopKiteTicker } from "../services/streamHandler";
+import { env } from "../config/env";
 
 const router = Router();
 
@@ -36,6 +38,20 @@ router.get("/callback", async (req, res, next) => {
     const query = z.object({ state: z.string().min(1), request_token: z.string().min(1) }).parse(req.query);
     const result = await completeKiteLogin(query.state, query.request_token);
     await writeAuditLog({ userId: result.userId, action: "BROKER_CONNECTED", entityType: "BrokerSession", metadata: result, request: req });
+
+    // Auto-start Kite ticker after OAuth when in kite mode
+    if (env.MARKET_DATA_MODE === "kite") {
+      try {
+        const io = req.app.get("io") as Server | undefined;
+        if (io) {
+          await startKiteTicker(io, result.userId);
+        }
+      } catch (tickerErr) {
+        // Non-blocking: ticker auto-start failure is logged but does not fail the OAuth callback
+        console.warn("Kite ticker auto-start after OAuth failed:", tickerErr);
+      }
+    }
+
     return res.json({ ok: true, provider: "ZERODHA", brokerUserId: result.brokerUserId });
   } catch (error) {
     return next(error);

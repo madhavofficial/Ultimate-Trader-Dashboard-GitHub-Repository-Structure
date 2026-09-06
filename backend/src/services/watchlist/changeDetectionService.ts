@@ -1,6 +1,6 @@
 import { prisma } from "../../db/client";
 import { getLatestLtp } from "../portfolioService";
-import { registerMockSymbol } from "../kiteMockStream";
+import { resolveSymbolPrice } from "../marketDataProvider";
 import {
   getUserCheckpoint,
   getBenchmarkPrice,
@@ -246,23 +246,18 @@ export async function getWatchlistSummary(
     let ltp = getLatestLtp(symbol);
 
     if (!ltp) {
-      const mockInst = await registerMockSymbol(symbol);
-      ltp = {
-        price: mockInst.price,
-        timestamp: mockInst.lastUpdated,
-        source: "mock",
-        volume: mockInst.volume,
-      };
+      const resolved = await resolveSymbolPrice(symbol);
+      if (resolved) ltp = resolved;
     }
 
-    if (ltp.timestamp) {
+    if (ltp?.timestamp) {
       observedTimestamps.push(ltp.timestamp);
     }
 
-    const freshness = evaluateQuoteFreshness(ltp.timestamp);
+    const freshness = evaluateQuoteFreshness(ltp?.timestamp);
     const cpItem = checkpointMap.get(symbol);
 
-    const currentPrice = ltp.price;
+    const currentPrice = ltp ? ltp.price : (cpItem ? Number(cpItem.price) : 0);
     let checkpointPrice = cpItem ? Number(cpItem.price) : currentPrice;
 
     // In replay mode, adjust checkpoint price to the selected historical baseline
@@ -279,7 +274,7 @@ export async function getWatchlistSummary(
     }
 
     // Actual observed volume (or null if unavailable)
-    const currentVolume = typeof ltp.volume === "number" && ltp.volume > 0 ? ltp.volume : null;
+    const currentVolume = typeof ltp?.volume === "number" && ltp.volume > 0 ? ltp.volume : null;
     const checkpointVolume = cpItem && Number(cpItem.volume) > 0 ? Number(cpItem.volume) : null;
 
     if (isFirstVisit) {
@@ -307,7 +302,7 @@ export async function getWatchlistSummary(
         ],
         summaryExplanation: "Initial tracking baseline recorded. Changes will be highlighted when you return.",
         freshness: freshness.state,
-        observedAt: ltp.timestamp || Date.now(),
+        observedAt: ltp?.timestamp || Date.now(),
         eventContinuityKey: continuityKey,
       });
       continue;
@@ -378,7 +373,7 @@ export async function getWatchlistSummary(
       reasons: evalResult.reasons,
       summaryExplanation: evalResult.summaryExplanation,
       freshness: freshness.state,
-      observedAt: ltp.timestamp || Date.now(),
+      observedAt: ltp?.timestamp || Date.now(),
       eventContinuityKey: continuityKey,
       visits,
     });

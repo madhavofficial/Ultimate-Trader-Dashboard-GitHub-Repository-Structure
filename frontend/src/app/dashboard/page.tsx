@@ -1472,7 +1472,7 @@ export default function DashboardPage() {
                       <input
                         value={symbol}
                         onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                        placeholder="INFY"
+                        placeholder="Enter NSE symbol"
                         className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant rounded-DEFAULT text-on-surface text-body-sm uppercase font-bold focus:outline-none focus:border-primary"
                       />
                     </div>

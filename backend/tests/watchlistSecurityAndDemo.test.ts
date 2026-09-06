@@ -112,11 +112,11 @@ test("Smart Market Watch - Security, Auth Boundaries & Demo Isolation", async (t
     const userAId = `user-a-${Date.now()}`;
     const userBId = `user-b-${Date.now()}`;
 
-    const tokenA = jwt.sign({ email: "usera@example.com" }, env.JWT_ACCESS_SECRET, {
+    const tokenA = jwt.sign({ email: "usera@test.invalid" }, env.JWT_ACCESS_SECRET, {
       subject: userAId,
       expiresIn: "15m",
     });
-    const tokenB = jwt.sign({ email: "userb@example.com" }, env.JWT_ACCESS_SECRET, {
+    const tokenB = jwt.sign({ email: "userb@test.invalid" }, env.JWT_ACCESS_SECRET, {
       subject: userBId,
       expiresIn: "15m",
     });
@@ -125,7 +125,7 @@ test("Smart Market Watch - Security, Auth Boundaries & Demo Isolation", async (t
     const createdUserA = await prisma.user.create({
       data: {
         id: userAId,
-        email: `usera-${Date.now()}@example.com`,
+        email: `usera-${Date.now()}@test.invalid`,
         passwordHash: "hash123",
       },
     });
@@ -134,7 +134,7 @@ test("Smart Market Watch - Security, Auth Boundaries & Demo Isolation", async (t
     const createdUserB = await prisma.user.create({
       data: {
         id: userBId,
-        email: `userb-${Date.now()}@example.com`,
+        email: `userb-${Date.now()}@test.invalid`,
         passwordHash: "hash123",
       },
     });

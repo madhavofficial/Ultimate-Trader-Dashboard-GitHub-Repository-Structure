@@ -1,6 +1,6 @@
 import { prisma } from "../../db/client";
 import { getLatestLtp } from "../portfolioService";
-import { registerMockSymbol } from "../kiteMockStream";
+import { resolveSymbolPrice } from "../marketDataProvider";
 
 export interface CapturedSymbolState {
   symbol: string;
@@ -71,23 +71,23 @@ export async function captureCurrentWatchlistState(userId: string): Promise<Capt
     let ltp = getLatestLtp(upper);
 
     if (!ltp) {
-      const mockInst = await registerMockSymbol(upper);
-      ltp = { price: mockInst.price, timestamp: mockInst.lastUpdated, source: "mock", volume: mockInst.volume };
+      const resolved = await resolveSymbolPrice(upper);
+      if (resolved) ltp = resolved;
     }
 
     const eventCount = await countEventsForSymbol(upper);
 
     // Actual observed volume or 0 if unavailable
-    const volumeBigInt = typeof ltp.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
+    const volumeBigInt = typeof ltp?.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
 
     states.push({
       symbol: upper,
-      price: ltp.price,
+      price: ltp ? ltp.price : (benchmarkPrice ?? 0),
       volume: volumeBigInt,
       benchmarkPrice,
       sentiment: null,
       eventCount,
-      observedAt: new Date(ltp.timestamp || Date.now()),
+      observedAt: new Date(ltp?.timestamp || Date.now()),
     });
   }
 
@@ -164,17 +164,13 @@ export async function recordOrUpdateStockCheckpoint(userId: string, symbol: stri
 
   let ltp = getLatestLtp(upper);
   if (!ltp) {
-    const mockInst = await registerMockSymbol(upper);
-    ltp = {
-      price: mockInst.price,
-      timestamp: mockInst.lastUpdated,
-      source: "mock",
-      volume: mockInst.volume,
-    };
+    const resolved = await resolveSymbolPrice(upper);
+    if (resolved) ltp = resolved;
   }
 
   const benchmarkPrice = await getBenchmarkPrice();
-  const volumeBigInt = typeof ltp.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
+  const volumeBigInt = typeof ltp?.volume === "number" && ltp.volume > 0 ? BigInt(ltp.volume) : BigInt(0);
+  const price = ltp ? ltp.price : (benchmarkPrice ?? 0);
 
   const item = await prisma.watchlistCheckpointItem.upsert({
     where: {
@@ -186,7 +182,7 @@ export async function recordOrUpdateStockCheckpoint(userId: string, symbol: stri
     create: {
       checkpointId: checkpoint!.id,
       symbol: upper,
-      price: ltp.price,
+      price,
       volume: volumeBigInt,
       benchmarkPrice,
       sentiment: null,

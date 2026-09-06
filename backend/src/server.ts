@@ -5,7 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
-import { startMockKiteStream } from "./services/kiteMockStream";
+import { createMarketDataProvider, setMarketDataProvider } from "./services/marketDataProvider";
 import authRoutes from "./routes/auth";
 import portfolioRoutes from "./routes/portfolio";
 import tradeRoutes from "./routes/trades";
@@ -115,7 +115,10 @@ export function createHttpServer() {
     socket.on("ping", (payload) => socket.emit("pong", { msg: "pong", received: payload }));
   });
 
-  if (env.MARKET_DATA_MODE === "mock") startMockKiteStream(io);
+  // NEW — provider is created once and stored as singleton
+  const provider = createMarketDataProvider(env.MARKET_DATA_MODE);
+  setMarketDataProvider(provider);
+  provider.start(io);
   startNewsWorkerScheduler(io);
   return server;
 }

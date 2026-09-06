@@ -12,8 +12,8 @@ integrationTest("core HTTP lifecycle", async () => {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const baseUrl = `http://127.0.0.1:${address.port}`;
-  const email = `phase0-${Date.now()}@example.com`;
-  const password = "ValidPass123!";
+  const email = `phase0-${Date.now()}@test.invalid`;
+  const password = `ValidPass-${Date.now()}!`;
   let databaseReady = false;
 
   const request = (path: string, init?: RequestInit) => fetch(`${baseUrl}${path}`, init);

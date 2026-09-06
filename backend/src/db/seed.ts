@@ -40,6 +40,43 @@ async function main() {
   ]);
 
   console.log(`Seeded demo data for ${user.email}`);
+
+  // Seed an initial checkpoint/baseline for the demo user
+  // so they see meaningful delta data on first visit rather than "first visit" state
+  const demoCheckpointPrices: Record<string, { price: number; volume: number }> = {
+    INFY: { price: 1505, volume: 810000 },
+    RELIANCE: { price: 2460, volume: 1430000 },
+    TCS: { price: 3790, volume: 480000 },
+  };
+
+  const existingCheckpoint = await prisma.watchlistCheckpoint.findUnique({
+    where: { userId: user.id },
+  });
+
+  if (!existingCheckpoint) {
+    // Only seed checkpoint if none exists — preserve user's actual checkpoint if they've used the app
+    const checkpoint = await prisma.watchlistCheckpoint.create({
+      data: {
+        userId: user.id,
+        lastCheckedAt: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
+      },
+    });
+
+    await prisma.watchlistCheckpointItem.createMany({
+      data: watchlist.map((symbol) => ({
+        checkpointId: checkpoint.id,
+        symbol,
+        price: demoCheckpointPrices[symbol]?.price ?? 1000,
+        volume: BigInt(demoCheckpointPrices[symbol]?.volume ?? 100000),
+        benchmarkPrice: null,
+        sentiment: null,
+        eventCount: 0,
+        observedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      })),
+    });
+
+    console.log(`Seeded demo checkpoint for ${user.email}`);
+  }
 }
 
 main()

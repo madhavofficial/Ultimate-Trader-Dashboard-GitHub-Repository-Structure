@@ -357,7 +357,7 @@ The key watchlist endpoints below are verified in [`backend/src/routes/watchlist
 | `/watchlist/checkpoints` | `GET` | Authenticated | Returns available historical checkpoints for time machine replay. |
 | `/watchlist/checkpoint/:symbol` | `POST` | Authenticated | Atomically acknowledges the current state of one watchlist symbol. |
 | `/watchlist/summary?baseline=<id>` | `GET` | Authenticated | Returns the watchlist briefing relative to a selected historical baseline. |
-| `/watchlist/demo-scenario` | `POST`/`GET` | Public / Demo | Returns an in-memory, isolated evaluation fixture (`demoScenarioService.ts`) without touching database state. |
+| `/watchlist/demo-scenario` | `POST`/`GET` | Public / Dev only | Returns an in-memory, isolated evaluation fixture (`demoScenarioService.ts`) without touching database state. **Returns `404` when `NODE_ENV=production`.** |
 | `/broker/kite/status` | `GET` | Authenticated | Reports the current Zerodha Kite connection status. |
 
 *(Note: On the `hackathon-scenarios` submission branch, additional `/watchlist/scenario` routes provide dynamic market simulation injection).*
@@ -480,13 +480,30 @@ The problem statement asks how the system scales and where simplicity was chosen
 
 ---
 
+## Kite Live-Mode Integration: Honest Status
+
+The Zerodha Kite Connect integration is **present in the codebase** but has **not been production-verified** end-to-end. The table below captures the actual pre-conditions and known gaps before live trading can be safely exercised:
+
+| Area | Status | Notes |
+| :--- | :---: | :--- |
+| **Kite OAuth Credentials** | ⚙️ Config required | `KITE_API_KEY`, `KITE_API_SECRET`, `KITE_REDIRECT_URL`, and a 64-character hex `KITE_TOKEN_ENCRYPTION_KEY` must all be set before `MARKET_DATA_MODE=kite` will connect. |
+| **Instrument Sync** | ⚙️ Config required | Symbol search depends on the PostgreSQL `Instrument` table. The sync job (`startInstrumentSyncScheduler`) only runs automatically when both `MARKET_DATA_MODE=kite` and `KITE_SYNC_USER_ID` are set. Without these, the symbol search box returns no results. |
+| **Live Ticker Startup** | ⚠️ Gap | `startKiteTicker()` exists in `kiteService.ts`, but the frontend does not appear to call `POST /broker/kite/stream/start` automatically after login. This must be verified or explicitly wired before relying on live WebSocket prices. |
+| **Session Expiry** | ⚠️ Gap | Kite access tokens expire after 24 hours. No automatic re-authentication flow is currently implemented; expired sessions require a manual re-OAuth. |
+| **Live Order Execution** | 🔴 Not tested | Safe end-to-end order testing requires a real broker session, live quotes, verified instrument tokens, sufficient funds, and passing all risk checks. This has not been exercised in the test suite. |
+| **Mock Mode (Default)** | ✅ Fully verified | All Playwright E2E tests, backend unit tests, and registration/login flows were run against `MARKET_DATA_MODE=mock`. Mock mode is the fully verified operational mode. |
+
+> **Honest summary:** Kite integration is present and architecturally wired, but the biggest practical blockers before a live deployment are instrument sync configuration and the live ticker startup gap. All automated testing to date covers mock mode only.
+
+---
+
 ## Testing & Verification Matrix
 
 - **Backend Test Suite:** **48 passing tests** (1 skipped, 0 failures, executed via `node --test dist/tests/*.test.js`).
   - Covers mathematical attention score clamping, boundary thresholds ($0.99\%$ vs $1.00\%$ vs $2.50\%$), volume pace ratios, benchmark alpha divergence, event continuity keys, freshness transitions, and authentication/demo isolation boundaries.
   *(The `hackathon-scenarios` submission branch adds 10 additional scenario controller tests for 59 passing tests).*
 - **Frontend Production Build:** Compiles cleanly with zero type or lint errors (`next build`).
-- **End-to-End Browser Testing:** Verified across modal interactions, responsive mobile viewports, and live API network request tracking.
+- **End-to-End Browser Testing (Mock Mode):** Registration, auto-login, terminal dashboard, watchlist navigation, and logout verified via Playwright. No hardcoded credentials appear in the UI.
 
 ---
 

@@ -5,6 +5,7 @@ import { authMiddleware, AuthRequest } from "../middleware/authMiddleware";
 import { completeKiteLogin, createKiteLoginUrl, syncKiteAccount, syncKiteHoldings } from "../services/kiteService";
 import { writeAuditLog } from "../services/auditLog";
 import { startKiteTicker, stopKiteTicker } from "../services/streamHandler";
+import { ensureInstrumentsAvailable } from "../services/instrumentService";
 import { env } from "../config/env";
 
 const router = Router();
@@ -39,20 +40,39 @@ router.get("/callback", async (req, res, next) => {
     const result = await completeKiteLogin(query.state, query.request_token);
     await writeAuditLog({ userId: result.userId, action: "BROKER_CONNECTED", entityType: "BrokerSession", metadata: result, request: req });
 
-    // Auto-start Kite ticker after OAuth when in kite mode
+    let streamStarted = false;
+    let streamError: string | undefined;
+
+    // Auto-start Kite ticker after OAuth when in kite mode, only after instrument data is verified
     if (env.MARKET_DATA_MODE === "kite") {
       try {
-        const io = req.app.get("io") as Server | undefined;
-        if (io) {
-          await startKiteTicker(io, result.userId);
+        const instrumentsReady = await ensureInstrumentsAvailable(result.userId);
+        if (!instrumentsReady) {
+          streamError = "Instrument catalog synchronization failed; live market stream could not be started";
+          console.warn(`[Kite] ${streamError} for user ${result.userId}`);
+        } else {
+          const io = req.app.get("io") as Server | undefined;
+          if (io) {
+            await startKiteTicker(io, result.userId);
+            streamStarted = true;
+          } else {
+            streamError = "Socket server unavailable; live market stream could not be started";
+            console.warn(`[Kite] ${streamError}`);
+          }
         }
       } catch (tickerErr) {
-        // Non-blocking: ticker auto-start failure is logged but does not fail the OAuth callback
+        streamError = tickerErr instanceof Error ? tickerErr.message : String(tickerErr);
         console.warn("Kite ticker auto-start after OAuth failed:", tickerErr);
       }
     }
 
-    return res.json({ ok: true, provider: "ZERODHA", brokerUserId: result.brokerUserId });
+    return res.json({
+      ok: true,
+      provider: "ZERODHA",
+      brokerUserId: result.brokerUserId,
+      streamStarted,
+      ...(streamError ? { streamError } : {}),
+    });
   } catch (error) {
     return next(error);
   }

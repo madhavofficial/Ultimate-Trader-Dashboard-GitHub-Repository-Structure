@@ -54,6 +54,48 @@ export function startInstrumentSyncScheduler(userId: string) {
   return () => { workerStop(); clearInterval(timer); };
 }
 
+let ongoingSync: Promise<boolean> | null = null;
+
+/**
+ * Ensures that NSE instruments are populated and fresh in the PostgreSQL Instrument table.
+ * If instruments already exist and were synced within the last 24 hours, returns true immediately without re-downloading.
+ * Otherwise, triggers syncInstruments(userId) reusing the existing CSV download and upsert pipeline.
+ */
+export async function ensureInstrumentsAvailable(userId: string): Promise<boolean> {
+  try {
+    const latest = await prisma.instrument.findFirst({
+      select: { syncedAt: true },
+      orderBy: { syncedAt: "desc" },
+    });
+
+    const isFresh = latest && (Date.now() - latest.syncedAt.getTime() < 24 * 60 * 60 * 1000);
+    if (isFresh) {
+      return true;
+    }
+
+    if (ongoingSync) {
+      return await ongoingSync;
+    }
+
+    ongoingSync = (async () => {
+      try {
+        await syncInstruments(userId);
+        return true;
+      } catch (err) {
+        console.error(`[Instruments] Sync failed for user ${userId}:`, err);
+        return false;
+      } finally {
+        ongoingSync = null;
+      }
+    })();
+
+    return await ongoingSync;
+  } catch (err) {
+    console.error(`[Instruments] Error checking instrument availability:`, err);
+    return false;
+  }
+}
+
 export function searchInstruments(query: string) {
   return prisma.instrument.findMany({
     where: {

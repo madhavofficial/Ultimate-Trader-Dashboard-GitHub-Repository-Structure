@@ -26,9 +26,14 @@ export async function startKiteTicker(io: Server, userId: string, tokens: number
         select: { instrumentToken: true },
       });
       instruments.forEach((inst) => tokenSet.add(inst.instrumentToken));
+
+      if (tokenSet.size === 0) {
+        throw new Error(`Failed to resolve instrument tokens for symbols: ${symbols.join(", ")}. Master catalog unpopulated.`);
+      }
     }
   } catch (err) {
-    console.warn("Could not prefetch user watchlist tokens for KiteTicker", err);
+    console.warn("Could not prefetch user watchlist tokens for KiteTicker:", err);
+    throw err;
   }
 
   const allTokens = Array.from(tokenSet);
@@ -121,4 +126,13 @@ export function stopKiteTicker(userId: string) {
     activeTickers.delete(userId);
     userSubscribedTokens.delete(userId);
   }
+}
+
+export function getUserSubscribedTokens(userId: string): number[] {
+  const set = userSubscribedTokens.get(userId);
+  return set ? Array.from(set) : [];
+}
+
+export function getActiveTicker(userId: string): Ticker | undefined {
+  return activeTickers.get(userId);
 }

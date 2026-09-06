@@ -506,7 +506,7 @@ The problem statement asks how the system scales and where simplicity was chosen
 
 ## Testing & Verification Matrix
 
-- **Backend Test Suite:** **58 passing tests** (1 skipped, 0 failures, executed via `node --test dist/tests/*.test.js`).
+- **Backend Test Suite:** **60 passing tests** (1 skipped, 0 failures, executed via `node --test --test-concurrency=1 dist/tests/*.test.js`).
   - Covers dual-provider abstraction (`MarketDataProvider`), mock-to-pipeline data flow, demo seeding and user isolation, configuration-based provider selection, Kite interface parity, graceful credential/session failure handling, mathematical attention score clamping, boundary thresholds ($0.99\%$ vs $1.00\%$ vs $2.50\%$), volume pace ratios, benchmark alpha divergence, event continuity keys, freshness transitions, and authentication/demo isolation boundaries.
   *(The `hackathon-scenarios` submission branch adds 10 additional scenario controller tests).*
 - **Frontend Production Build:** Compiles cleanly with zero type or lint errors (`next build`).

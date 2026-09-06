@@ -254,11 +254,14 @@ export async function getWatchlistSummary(
       observedTimestamps.push(ltp.timestamp);
     }
 
-    const freshness = evaluateQuoteFreshness(ltp?.timestamp);
+    const hasLiveQuote = !!(ltp && ltp.price > 0);
+    const freshness = evaluateQuoteFreshness(hasLiveQuote ? ltp!.timestamp : undefined);
     const cpItem = checkpointMap.get(symbol);
+    const cpPrice = cpItem && Number(cpItem.price) > 0 ? Number(cpItem.price) : null;
 
-    const currentPrice = ltp ? ltp.price : (cpItem ? Number(cpItem.price) : 0);
-    let checkpointPrice = cpItem ? Number(cpItem.price) : currentPrice;
+    // Honest price fallback: If live quote exists, use it. If missing, hold last recorded checkpoint price (or 0 if brand new).
+    const currentPrice = hasLiveQuote ? ltp!.price : (cpPrice ?? 0);
+    let checkpointPrice = cpPrice ?? currentPrice;
 
     // In replay mode, adjust checkpoint price to the selected historical baseline
     if (replayMode && activeBaseline) {
@@ -309,17 +312,19 @@ export async function getWatchlistSummary(
     }
 
     // Subsequent return visit: Calculate real deltas against acknowledged checkpoint
-    const priceChangePct = checkpointPrice > 0
+    // Honest delta gating: If no live quote is available, or checkpoint/current price is not positive,
+    // deltas cannot be computed honestly: freeze delta at 0.00%
+    const priceChangePct = (hasLiveQuote && checkpointPrice > 0 && currentPrice > 0)
       ? Number((((currentPrice - checkpointPrice) / checkpointPrice) * 100).toFixed(2))
       : 0;
 
     // Honest volume pace ratio (strictly null if either volume observation is missing or zero)
-    const volumeRatio = (checkpointVolume !== null && currentVolume !== null && checkpointVolume > 0)
+    const volumeRatio = (hasLiveQuote && checkpointVolume !== null && currentVolume !== null && checkpointVolume > 0)
       ? Number((currentVolume / checkpointVolume).toFixed(2))
       : null;
 
-    // Benchmark Alpha: stock % change minus NIFTY 50 % change (strictly null if benchmark is missing)
-    const benchmarkAlphaPct = typeof benchmarkChangePct === "number"
+    // Benchmark Alpha: stock % change minus NIFTY 50 % change (strictly null if quote or benchmark missing)
+    const benchmarkAlphaPct = (hasLiveQuote && typeof benchmarkChangePct === "number")
       ? Number((priceChangePct - benchmarkChangePct).toFixed(2))
       : null;
 
@@ -358,6 +363,24 @@ export async function getWatchlistSummary(
       stockCheckedAt || (checkpoint?.lastCheckedAt ? new Date(checkpoint.lastCheckedAt) : null)
     );
 
+    const reasons = hasLiveQuote
+      ? evalResult.reasons
+      : [
+          {
+            category: "PRICE" as const,
+            label: cpPrice
+              ? "Live quote unavailable — displaying last recorded checkpoint baseline"
+              : "Market quote unavailable for this instrument",
+            value: "N/A",
+            significance: "NEUTRAL" as const,
+          },
+          ...evalResult.reasons.filter((r) => r.category !== "PRICE"),
+        ];
+
+    const summaryExplanation = hasLiveQuote
+      ? evalResult.summaryExplanation
+      : "Market data feed unavailable for this symbol. Delta evaluation suspended.";
+
     changeItems.push({
       symbol,
       currentPrice,
@@ -368,10 +391,10 @@ export async function getWatchlistSummary(
       volumeRatio,
       benchmarkAlphaPct,
       newEventCount,
-      attentionScore: evalResult.attentionScore,
-      significance: evalResult.significance,
-      reasons: evalResult.reasons,
-      summaryExplanation: evalResult.summaryExplanation,
+      attentionScore: hasLiveQuote ? evalResult.attentionScore : 0,
+      significance: hasLiveQuote ? evalResult.significance : "UNCHANGED",
+      reasons,
+      summaryExplanation,
       freshness: freshness.state,
       observedAt: ltp?.timestamp || Date.now(),
       eventContinuityKey: continuityKey,

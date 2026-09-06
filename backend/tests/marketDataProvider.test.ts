@@ -264,3 +264,60 @@ test("K: Audit fallback path: captureCurrentWatchlistState never substitutes ben
     await prisma.user.deleteMany({ where: { id: testUserId } });
   }
 });
+
+// ── L. Audit: Missing live quote freezes deltas at 0% instead of -100% drop ──
+test("L: Audit: missing live quote freezes delta at 0% and does not trigger phantom alerts", async () => {
+  const { setMarketDataProvider, createMarketDataProvider } = await import("../src/services/marketDataProvider");
+  const { getWatchlistSummary } = await import("../src/services/watchlist/changeDetectionService");
+
+  // Temporarily switch provider to kite mode where UNQUOTED_EQUITY_XYZ has no live stream
+  setMarketDataProvider(createMarketDataProvider("kite"));
+
+  const testUserId = `audit-l-${Date.now()}`;
+  const user = await prisma.user.create({
+    data: { id: testUserId, email: `audit-l-${Date.now()}@test.invalid`, passwordHash: "h" },
+  });
+
+  try {
+    const symbol = "UNQUOTED_EQUITY_XYZ";
+    await prisma.watchlistItem.create({
+      data: { userId: testUserId, symbol },
+    });
+
+    const cp = await prisma.watchlistCheckpoint.create({
+      data: { userId: testUserId, lastCheckedAt: new Date(Date.now() - 3600000) },
+    });
+
+    await prisma.watchlistCheckpointItem.create({
+      data: {
+        checkpointId: cp.id,
+        symbol,
+        price: 1500.00,
+        volume: BigInt(500000),
+        observedAt: new Date(Date.now() - 3600000),
+      },
+    });
+
+    // Request watchlist summary without an active LTP quote
+    const summary = await getWatchlistSummary(testUserId);
+    const item = [
+      ...summary.groups.needsAttention,
+      ...summary.groups.worthALook,
+      ...summary.groups.unchanged,
+    ].find((i) => i.symbol === symbol);
+
+    assert.ok(item, "Item must be present in summary");
+    // Crucial: priceChangePct must NOT be -100%!
+    assert.equal(item.priceChangePct, 0, "Price delta must be 0% when no live quote exists");
+    assert.equal(item.currentPrice, 1500.00, "Current price should hold checkpoint price");
+    assert.equal(item.freshness, "DATA_UNAVAILABLE", "Freshness must be DATA_UNAVAILABLE");
+    assert.equal(item.significance, "UNCHANGED", "Must remain UNCHANGED, not falsely escalated");
+    assert.equal(item.attentionScore, 0, "Attention score must be 0");
+  } finally {
+    setMarketDataProvider(createMarketDataProvider("mock"));
+    await prisma.watchlistCheckpointItem.deleteMany({ where: { checkpoint: { userId: testUserId } } });
+    await prisma.watchlistCheckpoint.deleteMany({ where: { userId: testUserId } });
+    await prisma.watchlistItem.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.deleteMany({ where: { id: testUserId } });
+  }
+});

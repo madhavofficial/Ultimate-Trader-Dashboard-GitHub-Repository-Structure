@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=1 dist/tests/*.test.js",
     "test:integration": "npm run build && node --test dist/tests/api.integration.test.js",
     "dev": "ts-node-dev --respawn src/server.ts",
     "build": "tsc",

@@ -321,3 +321,165 @@ test("L: Audit: missing live quote freezes delta at 0% and does not trigger phan
     await prisma.user.deleteMany({ where: { id: testUserId } });
   }
 });
+
+// ── M. Regression Case 2: No quote + no checkpoint → first-visit baseline, no change ──
+test("M: Regression 2: No quote + no checkpoint establishes first-visit baseline with 0% delta", async () => {
+  const { setMarketDataProvider, createMarketDataProvider } = await import("../src/services/marketDataProvider");
+  const { getWatchlistSummary } = await import("../src/services/watchlist/changeDetectionService");
+
+  setMarketDataProvider(createMarketDataProvider("kite"));
+  const testUserId = `audit-m-${Date.now()}`;
+  await prisma.user.create({
+    data: { id: testUserId, email: `audit-m-${Date.now()}@test.invalid`, passwordHash: "h" },
+  });
+
+  try {
+    const symbol = "UNQUOTED_FIRST_VISIT_STOCK";
+    await prisma.watchlistItem.create({
+      data: { userId: testUserId, symbol },
+    });
+
+    const summary = await getWatchlistSummary(testUserId);
+    assert.equal(summary.isFirstVisit, true, "Must flag isFirstVisit=true");
+    const item = summary.groups.unchanged.find((i) => i.symbol === symbol);
+    assert.ok(item, "Item must be categorized under UNCHANGED on first visit");
+    assert.equal(item.priceChangePct, 0, "Price delta must be strictly 0% on first visit");
+    assert.equal(item.attentionScore, 0, "Attention score must be 0 on first visit");
+    assert.equal(item.volumeRatio, null, "Volume ratio must be null on first visit");
+    assert.equal(item.benchmarkAlphaPct, null, "Benchmark alpha must be null on first visit");
+  } finally {
+    setMarketDataProvider(createMarketDataProvider("mock"));
+    await prisma.watchlistCheckpointItem.deleteMany({ where: { checkpoint: { userId: testUserId } } });
+    await prisma.watchlistCheckpoint.deleteMany({ where: { userId: testUserId } });
+    await prisma.watchlistItem.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.deleteMany({ where: { id: testUserId } });
+  }
+});
+
+// ── N. Regression Case 3: Valid quote + checkpoint → actual delta ────────────
+test("N: Regression 3: Valid live quote with existing checkpoint computes accurate delta", async () => {
+  const { updateLtpAndBroadcast } = await import("../src/services/portfolioService");
+  const { getWatchlistSummary } = await import("../src/services/watchlist/changeDetectionService");
+
+  const testUserId = `audit-n-${Date.now()}`;
+  await prisma.user.create({
+    data: { id: testUserId, email: `audit-n-${Date.now()}@test.invalid`, passwordHash: "h" },
+  });
+
+  try {
+    const symbol = "ACTIVE_TEST_STOCK_N";
+    await prisma.watchlistItem.create({
+      data: { userId: testUserId, symbol },
+    });
+
+    const cp = await prisma.watchlistCheckpoint.create({
+      data: { userId: testUserId, lastCheckedAt: new Date(Date.now() - 3600000) },
+    });
+
+    await prisma.watchlistCheckpointItem.create({
+      data: {
+        checkpointId: cp.id,
+        symbol,
+        price: 1000.00,
+        volume: BigInt(100000),
+        observedAt: new Date(Date.now() - 3600000),
+      },
+    });
+
+    // Stream a live tick: price moves +3.5% (from 1000 to 1035), volume 2.0x (from 100k to 200k)
+    const fakeIo = { emit: () => {}, to: () => ({ emit: () => {} }) } as any;
+    await updateLtpAndBroadcast(fakeIo, [
+      {
+        symbol,
+        last_price: 1035.00,
+        volume: 200000,
+        timestamp: Date.now(),
+        source: "mock",
+      },
+    ]);
+
+    const summary = await getWatchlistSummary(testUserId);
+    const item = [
+      ...summary.groups.needsAttention,
+      ...summary.groups.worthALook,
+      ...summary.groups.unchanged,
+    ].find((i) => i.symbol === symbol);
+
+    assert.ok(item, "Item must be present in summary");
+    assert.equal(item.priceChangePct, 3.5, "Price delta must accurately reflect +3.5%");
+    assert.equal(item.currentPrice, 1035.00);
+    assert.equal(item.checkpointPrice, 1000.00);
+    assert.equal(item.volumeRatio, 2.0, "Volume ratio must be 2.00x");
+    assert.equal(item.significance, "NEEDS_ATTENTION", "Absolute move >= 2.5% promotes to NEEDS_ATTENTION");
+    assert.ok(item.attentionScore >= 30, "Attention score must reflect significant move");
+  } finally {
+    await prisma.watchlistCheckpointItem.deleteMany({ where: { checkpoint: { userId: testUserId } } });
+    await prisma.watchlistCheckpoint.deleteMany({ where: { userId: testUserId } });
+    await prisma.watchlistItem.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.deleteMany({ where: { id: testUserId } });
+  }
+});
+
+// ── O. Regression Case 4: Missing benchmark/volume → null, never fabricated zero ──
+test("O: Regression 4: Missing benchmark or baseline volume evaluates strictly to null, never 0.00x or 0.00%", async () => {
+  const { updateLtpAndBroadcast } = await import("../src/services/portfolioService");
+  const { getWatchlistSummary } = await import("../src/services/watchlist/changeDetectionService");
+
+  const testUserId = `audit-o-${Date.now()}`;
+  await prisma.user.create({
+    data: { id: testUserId, email: `audit-o-${Date.now()}@test.invalid`, passwordHash: "h" },
+  });
+
+  try {
+    const symbol = "TEST_STOCK_MISSING_VOL_BENCH";
+    await prisma.watchlistItem.create({
+      data: { userId: testUserId, symbol },
+    });
+
+    const cp = await prisma.watchlistCheckpoint.create({
+      data: { userId: testUserId, lastCheckedAt: new Date(Date.now() - 3600000) },
+    });
+
+    // Checkpoint recorded with volume = 0 (unrecorded baseline volume) and null benchmark
+    await prisma.watchlistCheckpointItem.create({
+      data: {
+        checkpointId: cp.id,
+        symbol,
+        price: 500.00,
+        volume: BigInt(0), // No volume recorded at checkpoint
+        benchmarkPrice: null, // No benchmark recorded
+        observedAt: new Date(Date.now() - 3600000),
+      },
+    });
+
+    // Current tick arrives without volume
+    const fakeIo = { emit: () => {}, to: () => ({ emit: () => {} }) } as any;
+    await updateLtpAndBroadcast(fakeIo, [
+      {
+        symbol,
+        last_price: 505.00,
+        // no volume field
+        timestamp: Date.now(),
+        source: "mock",
+      },
+    ]);
+
+    const summary = await getWatchlistSummary(testUserId);
+    const item = [
+      ...summary.groups.needsAttention,
+      ...summary.groups.worthALook,
+      ...summary.groups.unchanged,
+    ].find((i) => i.symbol === symbol);
+
+    assert.ok(item, "Item must be present");
+    // Volume ratio must be strictly null (never 0.00x)
+    assert.equal(item.volumeRatio, null, "Volume ratio must be strictly null when baseline volume was 0");
+    // Benchmark alpha must be null when checkpoint benchmark was missing
+    assert.equal(item.benchmarkAlphaPct, null, "Benchmark alpha must be strictly null when checkpoint benchmark was null");
+  } finally {
+    await prisma.watchlistCheckpointItem.deleteMany({ where: { checkpoint: { userId: testUserId } } });
+    await prisma.watchlistCheckpoint.deleteMany({ where: { userId: testUserId } });
+    await prisma.watchlistItem.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.deleteMany({ where: { id: testUserId } });
+  }
+});

@@ -55,23 +55,56 @@ test("B: Mock data reaches the normal watchlist pipeline via ltpMap single sourc
 // ── C. Demo account can load its seeded watchlist ────────────────────────────
 test("C: Demo account can load its seeded watchlist and checkpoint", async () => {
   const demoEmail = (process.env.SEED_EMAIL || "demo@example.com").toLowerCase();
-  const demoUser = await prisma.user.findUnique({
+  let demoUser = await prisma.user.findUnique({
     where: { email: demoEmail },
   });
 
+  // If not already seeded in database, seed it deterministically so the test never skips
   if (!demoUser) {
-    // If not yet seeded in this DB run, skip gracefully
-    return;
+    demoUser = await prisma.user.create({
+      data: {
+        email: demoEmail,
+        passwordHash: "demo-test-seeded-hash",
+      },
+    });
+    await prisma.watchlistItem.createMany({
+      data: [
+        { userId: demoUser.id, symbol: "INFY" },
+        { userId: demoUser.id, symbol: "RELIANCE" },
+        { userId: demoUser.id, symbol: "TCS" },
+      ],
+    });
+    const cp = await prisma.watchlistCheckpoint.create({
+      data: {
+        userId: demoUser.id,
+        lastCheckedAt: new Date(Date.now() - 7200000),
+      },
+    });
+    await prisma.watchlistCheckpointItem.createMany({
+      data: [
+        { checkpointId: cp.id, symbol: "INFY", price: 1505, volume: BigInt(810000), observedAt: new Date() },
+        { checkpointId: cp.id, symbol: "RELIANCE", price: 2460, volume: BigInt(1430000), observedAt: new Date() },
+        { checkpointId: cp.id, symbol: "TCS", price: 3790, volume: BigInt(480000), observedAt: new Date() },
+      ],
+    });
   }
 
+  assert.ok(demoUser, "Demo user must exist");
   const items = await prisma.watchlistItem.findMany({
     where: { userId: demoUser.id },
   });
-  assert.ok(items.length >= 3, "Demo user should have seeded watchlist items");
+  assert.ok(items.length >= 3, "Demo user must have at least 3 seeded watchlist items");
   const symbols = items.map((i) => i.symbol);
-  assert.ok(symbols.includes("INFY"));
-  assert.ok(symbols.includes("RELIANCE"));
-  assert.ok(symbols.includes("TCS"));
+  assert.ok(symbols.includes("INFY"), "Demo watchlist must contain INFY");
+  assert.ok(symbols.includes("RELIANCE"), "Demo watchlist must contain RELIANCE");
+  assert.ok(symbols.includes("TCS"), "Demo watchlist must contain TCS");
+
+  const checkpoint = await prisma.watchlistCheckpoint.findUnique({
+    where: { userId: demoUser.id },
+    include: { items: true },
+  });
+  assert.ok(checkpoint !== null, "Demo user must have a seeded checkpoint baseline");
+  assert.ok(checkpoint.items.length >= 3, "Seeded checkpoint must contain items");
 });
 
 // ── D. Fresh users do not inherit demo state ─────────────────────────────────
@@ -197,5 +230,37 @@ test("J: No scenario-controller routes exist on madhav branch", async () => {
     );
   } finally {
     server.close();
+  }
+});
+
+// ── K. Audit: captureCurrentWatchlistState never substitutes benchmarkPrice ──
+test("K: Audit fallback path: captureCurrentWatchlistState never substitutes benchmarkPrice for a stock price", async () => {
+  const { captureCurrentWatchlistState } = await import("../src/services/watchlist/snapshotService");
+  const testUserId = `audit-test-${Date.now()}`;
+  await prisma.user.create({
+    data: { id: testUserId, email: `audit-${Date.now()}@test.invalid`, passwordHash: "h" },
+  });
+
+  try {
+    // Add a symbol that has no mock or live price in ltpMap
+    await prisma.watchlistItem.create({
+      data: { userId: testUserId, symbol: "UNKNOWN_NO_QUOTE_STOCK" },
+    });
+
+    const states = await captureCurrentWatchlistState(testUserId);
+    const stockState = states.find((s) => s.symbol === "UNKNOWN_NO_QUOTE_STOCK");
+    assert.ok(stockState, "Stock state must be captured");
+
+    // Price must NOT be equal to benchmark price (e.g. 24000+ for NIFTY)
+    if (stockState.benchmarkPrice) {
+      assert.notEqual(
+        stockState.price,
+        stockState.benchmarkPrice,
+        "Stock price must NEVER be substituted with benchmark index price"
+      );
+    }
+  } finally {
+    await prisma.watchlistItem.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.deleteMany({ where: { id: testUserId } });
   }
 });

@@ -279,7 +279,7 @@ The application implements a clean provider abstraction ([`marketDataProvider.ts
 1. **Provider Abstraction ([`marketDataProvider.ts`](backend/src/services/marketDataProvider.ts)):** Unified `MarketDataProvider` interface with `MockMarketDataProvider` and `KiteMarketDataProvider` implementations. Provider selection is strictly configuration-driven via `MARKET_DATA_MODE` (`mock` or `kite`) — never based on user identity or hardcoded emails.
 2. **In-Memory LTP Map ([`portfolioService.ts`](backend/src/services/portfolioService.ts)):** The single source of truth storing `{ price, volume, timestamp, source }` per symbol. Both providers stream ticks directly into `ltpMap` through `updateLtpAndBroadcast()`.
 3. **Identical Downstream Pipeline:** Watchlist checkpointing, change detection, 4-factor attention scoring, and factual reasoning badges consume data exclusively from `ltpMap`. The analytical engine runs identical deterministic algorithms regardless of the underlying market data provider.
-4. **Kite OAuth & Auto-Ticker:** In `kite` mode, users authenticate via standard Kite Connect OAuth (`/broker/kite/login` &rarr; `/broker/kite/callback`). Upon callback completion, the user's ticker automatically starts streaming subscribed watchlist tokens into `ltpMap`.
+4. **Kite OAuth & Auto-Ticker:** In `kite` mode, users authenticate via standard Kite Connect OAuth (`/broker/kite/login` &rarr; `/broker/kite/callback`). Upon callback completion, the system verifies and ensures the NSE instrument master catalog is synchronized before automatically starting the user's ticker to stream subscribed watchlist tokens into `ltpMap`.
 
 ---
 
@@ -426,18 +426,28 @@ Registration now completes the first authenticated session without a redundant l
 
 ## Judge Demo Quickstart (< 2 Minutes)
 
-Evaluators can test the core workflow end-to-end using the built-in demo evaluator scenario:
+Evaluators can test the core workflow end-to-end either via the pre-seeded authentic evaluator account or via the isolated in-memory demo scenario:
 
-1. **Start the applications** using the Quickstart instructions below.
-2. **Open the Watchlist Briefing:** Navigate to `http://localhost:3000` (automatically redirects to `/watchlist`).
-3. **Establish Baseline / Demo Mode:** When running without an authenticated JWT, the frontend automatically activates **Evaluator Demo Mode** (`POST /watchlist/demo-scenario`), or click the **`⚡ Evaluator Demo`** button in the header.
-4. **Inspect Triage & Scoring:**
+### Option A: Pre-Seeded Evaluator Demo Account (Full Stateful Experience)
+Running `npm run prisma:seed` creates a fully configured evaluator account with pre-seeded holdings, watchlist items, and an established 2-hour-old baseline checkpoint in PostgreSQL:
+- **Email:** `demo@example.com`
+- **Password:** `ChangeMe123!`
+- **Seeded Watchlist:** `INFY`, `RELIANCE`, `TCS`
+- **Seeded Checkpoint Baseline:** Established 2 hours prior (`INFY: ₹1,505.00`, `RELIANCE: ₹2,460.00`, `TCS: ₹3,790.00`)
+- **Workflow:**
+  1. Navigate to `http://localhost:3000/login` and sign in with the credentials above.
+  2. The authenticated Watchlist Briefing (`/watchlist`) automatically loads the persisted baseline from PostgreSQL, displaying authentic elapsed duration (e.g. *"2h ago"*), deltas against your checkpoint, and category triage.
+  3. Click **`Mark Checkpoint`** (or press <kbd>C</kbd>) to advance the baseline and observe all instruments reset to baseline spot prices with `0.00%` delta.
+
+### Option B: Unauthenticated Evaluator Demo Fixture
+1. Navigate directly to `http://localhost:3000` (redirects to `/watchlist`).
+2. When accessed without an active session, the app automatically activates **Evaluator Demo Mode** (`POST /watchlist/demo-scenario`), or click the **`⚡ Evaluator Demo`** button in the header.
+3. **Inspect Triage & Scoring:**
    - In the Evaluator Demo view, observe **`RELIANCE`** promoted directly to 🔴 **`NEEDS ATTENTION`** with an Attention Score of 84 (driven by $+4.50\%$ price change, $2.8\times$ volume pace, $+3.50\%$ benchmark alpha, and a new catalyst).
    - Observe **`TCS`** categorized under 🟡 **`WORTH A LOOK`** ($-1.70\%$ shift, underperforming NIFTY 50 by $-2.70\%$).
    - Observe **`INFY`** and **`HDFCBANK`** triaged under ⚪ **`UNCHANGED`** (sub-$1.0\%$ normal market noise).
    - Expand the items to inspect the structured, deterministic reason badges.
-5. **Acknowledge Changes:** Click **`Mark Checkpoint`** (or press key <kbd>C</kbd>) to advance the baseline.
-6. **Multi-Scenario Simulation:** To test live interactive switching across all 6 market scenarios (`stale`, `market_closed`, `volume_spike`, etc.), switch to the **`hackathon-scenarios`** submission branch.
+4. **Multi-Scenario Simulation:** To test live interactive switching across all 6 market scenarios (`stale`, `market_closed`, `volume_spike`, etc.), switch to the **`hackathon-scenarios`** submission branch.
 
 ---
 
@@ -506,11 +516,15 @@ The problem statement asks how the system scales and where simplicity was chosen
 
 ## Testing & Verification Matrix
 
-- **Backend Test Suite:** **63 passing tests** (1 skipped, 0 failures, executed via `node --test --test-concurrency=1 dist/tests/*.test.js`).
-  - Covers dual-provider abstraction (`MarketDataProvider`), mock-to-pipeline data flow, demo seeding and user isolation, configuration-based provider selection, Kite interface parity, graceful credential/session failure handling, mathematical attention score clamping, boundary thresholds ($0.99\%$ vs $1.00\%$ vs $2.50\%$), volume pace ratios, benchmark alpha divergence, event continuity keys, freshness transitions, and authentication/demo isolation boundaries.
+- **Backend Test Suite:** **70 passing tests** (1 skipped, 0 failures, executed via `node --test --test-concurrency=1 dist/tests/*.test.js`).
+  - **Core Watchlist & Attention Engine (20 tests):** Boundary thresholds ($0.99\%$ vs $1.00\%$ vs $2.50\%$), volume pace ratios, benchmark alpha divergence, catalyst saturation, event continuity key stability across tick jitter, temporal freshness transitions (`LIVE`, `DELAYED`, `STALE`, `MARKET_CLOSED`, `DATA_UNAVAILABLE`), and duration formatting.
+  - **Provider Abstraction & Parity (15 tests):** Unified `MarketDataProvider` interface, in-memory `ltpMap` single source of truth, configuration-based provider selection (`MARKET_DATA_MODE=mock|kite`), demo account loading and fresh user isolation, graceful Kite credential/session error handling, and 4 invariant regression tests (preventing benchmark price fallback leakage, suppressing phantom alerts on missing quotes, establishing clean zero-delta baselines for fresh users, and strict null propagation on unrecorded volume).
+  - **Kite Fresh-User Onboarding & Instrument Catalog Synchronization (6 tests):** Automated master catalog synchronization upon Kite OAuth callback when table is unpopulated, deduplication preventing redundant downloads, startup abort on instrument sync failure preventing silent zero-token streaming, mock mode independence from the Instrument table, multi-user session/subscription isolation, and resilient OAuth session persistence when market stream startup fails.
+  - **Financial Math & Trade Invariants (12 tests):** Statutory charges and taxes for delivery and intraday equity, market session calendar evaluations, RSI oscillator accuracy, trade quantity and alert condition validations, weighted average holding calculations, and unrealized PnL logic.
+  - **Security, Authentication & Demo Isolation (8 tests):** Unauthenticated 401 protections, malformed JWT rejection, public demo scenario access, zero mutation/leakage of database checkpoints from demo execution, and strict per-user JWT tenant isolation.
   *(The `hackathon-scenarios` submission branch adds 10 additional scenario controller tests).*
-- **Frontend Production Build:** Compiles cleanly with zero type or lint errors (`next build`).
-- **End-to-End Browser Testing:** Registration, auto-login, terminal dashboard, watchlist navigation, and logout verified via Playwright. No hardcoded credentials appear in the UI.
+- **Frontend Production Build:** Compiles cleanly with zero type or lint errors (`next build`, 6/6 static routes).
+- **End-to-End Browser Testing:** Registration, auto-login, terminal dashboard, watchlist navigation, checkpoint marking, drawer inspection, audio/visual notifications, responsive layout (desktop, tablet, mobile), and logout verified via Playwright. No hardcoded credentials appear in the UI.
 
 ---
 
